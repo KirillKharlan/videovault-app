@@ -29,7 +29,8 @@ dependencies:
   # UI
   cached_network_image: ^3.3.1     # кэш для превью
   share_plus: ^9.0.0               # share intent (принимать ссылки)
-  receive_sharing_intent: ^1.8.0   # получать shared URL из YouTube/TikTok
+  share_handler: ^0.0.25
+  # receive_sharing_intent: ^1.8.0   # получать shared URL из YouTube/TikTok
   flutter_local_notifications: ^17.1.2  # уведомления о загрузке
 
   # Утилиты
