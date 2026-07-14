@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiClient {
-  // ← Сюда вставишь свой URL с Render после деплоя
+  // ← Вставь свой URL с Render после деплоя
   static const String baseUrl = 'https://videovault-api.onrender.com';
 
   static final ApiClient _instance = ApiClient._internal();
@@ -20,18 +20,17 @@ class ApiClient {
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'url': url}),
         )
-        .timeout(const Duration(seconds: 30));
+        .timeout(const Duration(seconds: 45));
 
     if (response.statusCode == 200) {
-      final json = jsonDecode(response.body);
-      return VideoInfo.fromJson(json);
+      return VideoInfo.fromJson(jsonDecode(response.body));
     } else {
       final err = jsonDecode(response.body);
       throw ApiException(err['detail'] ?? 'Failed to fetch video info');
     }
   }
 
-  // ─── Получить прямую ссылку для скачивания ─────────────────────────────
+  // ─── Получить прямую ссылку + заголовки для скачивания ─────────────────
 
   Future<DownloadInfo> getDownloadUrl(String url, String quality) async {
     final response = await _client
@@ -40,11 +39,10 @@ class ApiClient {
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'url': url, 'quality': quality}),
         )
-        .timeout(const Duration(seconds: 45));
+        .timeout(const Duration(seconds: 60));
 
     if (response.statusCode == 200) {
-      final json = jsonDecode(response.body);
-      return DownloadInfo.fromJson(json);
+      return DownloadInfo.fromJson(jsonDecode(response.body));
     } else {
       final err = jsonDecode(response.body);
       throw ApiException(err['detail'] ?? 'Failed to get download URL');
@@ -65,7 +63,7 @@ class ApiClient {
   }
 }
 
-// ─── Модели ответов ─────────────────────────────────────────────────────────
+// ─── Модели ─────────────────────────────────────────────────────────────────
 
 class VideoInfo {
   final String title;
@@ -113,6 +111,8 @@ class DownloadInfo {
   final int filesize;
   final int height;
   final String platform;
+  // Заголовки из yt-dlp — критично для YouTube iOS клиента в 2026.07.04
+  final Map<String, String> headers;
 
   DownloadInfo({
     required this.downloadUrl,
@@ -121,6 +121,7 @@ class DownloadInfo {
     required this.filesize,
     required this.height,
     required this.platform,
+    required this.headers,
   });
 
   factory DownloadInfo.fromJson(Map<String, dynamic> j) => DownloadInfo(
@@ -130,6 +131,10 @@ class DownloadInfo {
         filesize: j['filesize'] ?? 0,
         height: j['height'] ?? 0,
         platform: j['platform'] ?? 'other',
+        headers: j['headers'] != null
+            ? Map<String, String>.from(
+                (j['headers'] as Map).map((k, v) => MapEntry(k.toString(), v.toString())))
+            : {},
       );
 }
 
