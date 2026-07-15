@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
+import 'package:flutter/services.dart';
 
 class DownloadScreen extends StatefulWidget {
   final String? initialUrl;

@@ -17,6 +17,7 @@
         "path",
         "path_provider",
         "permission_handler",
+        "receive_sharing_intent",
         "share_handler",
         "share_plus",
         "sqflite",
@@ -51,6 +52,14 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "receive_sharing_intent",
+      "version": "1.9.0",
+      "dependencies": [
+        "flutter",
+        "plugin_platform_interface"
       ]
     },
     {
@@ -304,6 +313,13 @@
         "stream_channel",
         "string_scanner",
         "term_glyph"
+      ]
+    },
+    {
+      "name": "plugin_platform_interface",
+      "version": "2.1.8",
+      "dependencies": [
+        "meta"
       ]
     },
     {
@@ -787,13 +803,6 @@
       "dependencies": [
         "source_span",
         "string_scanner"
-      ]
-    },
-    {
-      "name": "plugin_platform_interface",
-      "version": "2.1.8",
-      "dependencies": [
-        "meta"
       ]
     },
     {
