@@ -44,14 +44,24 @@ class DownloadService {
     onProgress?.call(0, 'Запуск загрузки…');
     _showNotif(0, 'Запуск…');
 
-    // 1. Старт задачи на сервере
     final taskId = await _api.startDownload(url, quality);
 
-    // 2. Polling прогресса
     TaskProgress progress;
+    int errorCount = 0;
+    
     while (true) {
       await Future.delayed(const Duration(milliseconds: 1500));
-      progress = await _api.getProgress(taskId);
+      try {
+        progress = await _api.getProgress(taskId);
+        errorCount = 0;
+      } catch (e) {
+        errorCount++;
+        if (errorCount > 8) {
+          _notifs.cancel(42);
+          throw Exception("Потеряно соединение с сервером. Попробуйте позже.");
+        }
+        continue;
+      }
 
       if (progress.isError) {
         _notifs.cancel(42);
@@ -65,39 +75,52 @@ class DownloadService {
       if (progress.isDone) break;
     }
 
-    // 3. Скачиваем файл с сервера на телефон
     onProgress?.call(0.99, 'Сохранение на телефон…');
     final dir = await _videosDir();
-    final filename = progress.filename ?? 'video.mp4';
-    final filePath = '${dir.path}/$filename';
+    final rawFilename = progress.filename ?? 'video.mp4';
+    final safeFilename = rawFilename.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+    final filePath = '${dir.path}/$safeFilename';
 
-    await _dio.download(
-      _api.fileUrl(taskId),
-      filePath,
-      onReceiveProgress: (received, total) {
-        if (total > 0) {
-          final mb = received / 1024 / 1024;
-          onProgress?.call(0.99, 'Сохранение… ${mb.toStringAsFixed(1)} MB');
-        }
-      },
-    );
+    try {
+      await _dio.download(
+        _api.fileUrl(taskId),
+        filePath,
+        onReceiveProgress: (received, total) {
+          if (total > 0) {
+            final mb = received / 1024 / 1024;
+            onProgress?.call(0.99, 'Сохранение… ${mb.toStringAsFixed(1)} MB');
+          }
+        },
+      );
+    } catch (e) {
+      _notifs.cancel(42);
+      throw Exception("Ошибка при сохранении файла на устройство: $e");
+    }
 
     _notifs.cancel(42);
-    _showDoneNotif(progress.title ?? filename);
+    _showDoneNotif(progress.title ?? safeFilename);
 
-    // 4. Сохраняем в локальную БД
     final file = File(filePath);
     final fileSize = await file.exists() ? await file.length() : 0;
 
+    int duration = 0;
+    String? platform;
+    try {
+      final info = await _api.fetchInfo(url);
+      duration = info.duration;
+      platform = info.platform;
+    } catch (_) {}
+
     final video = Video(
-      title: progress.title ?? filename,
+      title: progress.title ?? safeFilename,
       filePath: filePath,
       sourceUrl: url,
-      platform: null,
-      duration: 0,
+      platform: platform,
+      duration: duration,
       fileSize: fileSize,
       albumId: albumId,
     );
+    
     final id = await _db.insertVideo(video);
     return video.copyWith(id: id, fileSize: fileSize);
   }

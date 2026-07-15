@@ -114,6 +114,8 @@ class TaskProgress {
   final String? errorType;
   final int? fileSize;
   final String? filename;
+  final String? platform;
+  final int? duration;
 
   TaskProgress({
     required this.status,
@@ -124,6 +126,8 @@ class TaskProgress {
     this.errorType,
     this.fileSize,
     this.filename,
+    this.platform,
+    this.duration,
   });
 
   factory TaskProgress.fromJson(Map<String, dynamic> j) => TaskProgress(
