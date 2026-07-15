@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 
 class ApiClient {
   // ← Вставь свой URL с Render после деплоя
-  static const String baseUrl = 'https://github.com/KirillKharlan/videovault-server';
+  static const String baseUrl = 'https://videovault-server.onrender.com/';
 
   static final ApiClient _instance = ApiClient._internal();
   factory ApiClient() => _instance;
