@@ -170,7 +170,11 @@ class _DownloadScreenState extends State<DownloadScreen> {
               const SizedBox(height: 12),
 
               _optionRow(Icons.hd, 'Качество',
-                  _selectedQuality != null ? '${_selectedQuality}p' : 'Выберите после загрузки инфо',
+                  _selectedQuality != null
+                      ? (_selectedQuality!.isNotEmpty && RegExp(r'^\d+$').hasMatch(_selectedQuality!)
+                          ? '${_selectedQuality}p'
+                          : _selectedQuality!)
+                      : 'Выберите после загрузки инфо',
                   _info == null ? null : _pickQuality),
 
               const Divider(color: Color(0xFF2A2A38), height: 24),

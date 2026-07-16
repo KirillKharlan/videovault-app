@@ -17,8 +17,6 @@ class DownloadService {
   final _notifs = FlutterLocalNotificationsPlugin();
   bool _notifsInit = false;
 
-  // ─── Init ───────────────────────────────────────────────────────────────
-
   Future<void> initNotifications() async {
     if (_notifsInit) return;
     await _notifs.initialize(const InitializationSettings(
@@ -26,13 +24,6 @@ class DownloadService {
     ));
     _notifsInit = true;
   }
-
-  // ─── Download ───────────────────────────────────────────────────────────
-  //
-  // Новая схема (соответствует app.py):
-  //   1. POST /api/download  → task_id
-  //   2. Polling GET /api/progress/<id> каждые 1.5 сек
-  //   3. Когда status == 'done' → GET /api/file/<id> → сохраняем файл
 
   Future<Video> download({
     required String url,
@@ -44,21 +35,47 @@ class DownloadService {
     onProgress?.call(0, 'Запуск загрузки…');
     _showNotif(0, 'Запуск…');
 
+    // 1. Старт задачи — таймаут 90 сек (сервер может просыпаться)
     final taskId = await _api.startDownload(url, quality);
 
+    // 2. Polling прогресса
+    // Если сервер перезапустился во время обновления yt-dlp —
+    // ждём до 60 сек пока он поднимется и задача снова появится
     TaskProgress progress;
+    int notFoundCount = 0;
     int errorCount = 0;
-    
+    const maxNotFound = 40; // 40 × 1.5 сек = 60 сек ожидания
+
     while (true) {
       await Future.delayed(const Duration(milliseconds: 1500));
+
       try {
         progress = await _api.getProgress(taskId);
+        notFoundCount = 0;
         errorCount = 0;
       } catch (e) {
-        errorCount++;
-        if (errorCount > 8) {
+        final msg = e.toString();
+
+        if (msg.contains('Задача не найдена')) {
+          // Сервер перезапустился — ждём пока задача появится снова
+          notFoundCount++;
+          if (notFoundCount <= maxNotFound) {
+            onProgress?.call(0.01,
+                'Сервер обновляется… ожидание ${notFoundCount * 2} сек');
+            continue;
+          }
           _notifs.cancel(42);
-          throw Exception("Потеряно соединение с сервером. Попробуйте позже.");
+          throw Exception(
+            'Сервер перезапустился во время загрузки. '
+            'Попробуйте скачать снова — теперь yt-dlp обновлён и всё заработает.',
+          );
+        }
+
+        // Другие сетевые ошибки — даём 3 попытки
+        errorCount++;
+        if (errorCount > 3) {
+          _notifs.cancel(42);
+          throw Exception('Потеряно соединение с сервером: $e');
         }
         continue;
       }
@@ -68,13 +85,13 @@ class DownloadService {
         throw Exception(progress.error ?? 'Ошибка загрузки');
       }
 
-      final pct = progress.percent / 100;
-      onProgress?.call(pct, progress.step);
+      onProgress?.call(progress.percent / 100, progress.step);
       _showNotif(progress.percent.toInt(), progress.title ?? 'Загрузка…');
 
       if (progress.isDone) break;
     }
 
+    // 3. Скачиваем файл с сервера на телефон
     onProgress?.call(0.99, 'Сохранение на телефон…');
     final dir = await _videosDir();
     final rawFilename = progress.filename ?? 'video.mp4';
@@ -94,7 +111,7 @@ class DownloadService {
       );
     } catch (e) {
       _notifs.cancel(42);
-      throw Exception("Ошибка при сохранении файла на устройство: $e");
+      throw Exception('Ошибка при сохранении файла: $e');
     }
 
     _notifs.cancel(42);
@@ -103,29 +120,19 @@ class DownloadService {
     final file = File(filePath);
     final fileSize = await file.exists() ? await file.length() : 0;
 
-    int duration = 0;
-    String? platform;
-    try {
-      final info = await _api.fetchInfo(url);
-      duration = info.duration;
-      platform = info.platform;
-    } catch (_) {}
-
     final video = Video(
       title: progress.title ?? safeFilename,
       filePath: filePath,
       sourceUrl: url,
-      platform: platform,
-      duration: duration,
+      platform: null,
+      duration: 0,
       fileSize: fileSize,
       albumId: albumId,
     );
-    
+
     final id = await _db.insertVideo(video);
     return video.copyWith(id: id, fileSize: fileSize);
   }
-
-  // ─── Helpers ────────────────────────────────────────────────────────────
 
   Future<Directory> _videosDir() async {
     final base = await getApplicationDocumentsDirectory();

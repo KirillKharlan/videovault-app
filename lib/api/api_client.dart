@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiClient {
-  // БЕЗ слеша в конце!
   static const String baseUrl = 'https://videovault-server.onrender.com';
 
   static final ApiClient _instance = ApiClient._internal();
@@ -12,12 +11,13 @@ class ApiClient {
   final _client = http.Client();
 
   // ─── Инфо о видео ──────────────────────────────────────────────────────
+  // Таймаут 90 сек — Render спит 15-30 сек + обновление yt-dlp ~10 сек
   Future<VideoInfo> fetchInfo(String url) async {
     final response = await _client.post(
-      Uri.parse('$baseUrl/api/info'),          // ← /api/info
+      Uri.parse('$baseUrl/api/info'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'url': url}),
-    ).timeout(const Duration(seconds: 45));
+    ).timeout(const Duration(seconds: 90));
 
     if (response.statusCode == 200) {
       return VideoInfo.fromJson(jsonDecode(response.body));
@@ -27,12 +27,13 @@ class ApiClient {
   }
 
   // ─── Запустить скачивание → получить task_id ────────────────────────────
+  // Таймаут 90 сек — сервер может быть в процессе старта
   Future<String> startDownload(String url, String quality) async {
     final response = await _client.post(
-      Uri.parse('$baseUrl/api/download'),      // ← /api/download
+      Uri.parse('$baseUrl/api/download'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'url': url, 'quality': quality}),
-    ).timeout(const Duration(seconds: 30));
+    ).timeout(const Duration(seconds: 90));
 
     if (response.statusCode == 200) {
       final json = jsonDecode(response.body);
@@ -45,8 +46,8 @@ class ApiClient {
   // ─── Прогресс задачи ────────────────────────────────────────────────────
   Future<TaskProgress> getProgress(String taskId) async {
     final response = await _client.get(
-      Uri.parse('$baseUrl/api/progress/$taskId'), // ← /api/progress/<id>
-    ).timeout(const Duration(seconds: 10));
+      Uri.parse('$baseUrl/api/progress/$taskId'),
+    ).timeout(const Duration(seconds: 15));
 
     if (response.statusCode == 200) {
       return TaskProgress.fromJson(jsonDecode(response.body));
@@ -54,10 +55,8 @@ class ApiClient {
     throw ApiException('Задача не найдена');
   }
 
-  // ─── URL для скачивания файла ────────────────────────────────────────────
-  String fileUrl(String taskId) => '$baseUrl/api/file/$taskId'; // ← /api/file/<id>
+  String fileUrl(String taskId) => '$baseUrl/api/file/$taskId';
 
-  // ─── Проверка сервера ────────────────────────────────────────────────────
   Future<bool> checkHealth() async {
     try {
       final response = await _client
@@ -95,7 +94,10 @@ class VideoInfo {
         thumbnail: j['thumbnail'],
         platform:  j['platform'] ?? 'other',
         uploader:  j['uploader'] ?? '',
-        qualities: List<String>.from(j['qualities'] ?? ['best']),
+        // Убираем лишнюю 'p' если сервер вдруг её пришлёт
+        qualities: List<String>.from(j['qualities'] ?? ['best'])
+            .map((q) => q.replaceAll('p', ''))
+            .toList(),
       );
 
   String get durationFormatted {
@@ -106,7 +108,7 @@ class VideoInfo {
 }
 
 class TaskProgress {
-  final String status;   // queued / fetching_info / downloading / done / error
+  final String status;
   final double percent;
   final String step;
   final String? title;
@@ -114,8 +116,6 @@ class TaskProgress {
   final String? errorType;
   final int? fileSize;
   final String? filename;
-  final String? platform;
-  final int? duration;
 
   TaskProgress({
     required this.status,
@@ -126,8 +126,6 @@ class TaskProgress {
     this.errorType,
     this.fileSize,
     this.filename,
-    this.platform,
-    this.duration,
   });
 
   factory TaskProgress.fromJson(Map<String, dynamic> j) => TaskProgress(
@@ -141,9 +139,9 @@ class TaskProgress {
         filename:  j['filename'],
       );
 
-  bool get isDone    => status == 'done';
-  bool get isError   => status == 'error';
-  bool get isActive  => !isDone && !isError;
+  bool get isDone   => status == 'done';
+  bool get isError  => status == 'error';
+  bool get isActive => !isDone && !isError;
 }
 
 class ApiException implements Exception {
