@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
+import '../widgets/safe_bottom_sheet.dart';
 
 class DownloadScreen extends StatefulWidget {
   final String? initialUrl;
@@ -15,6 +16,7 @@ class DownloadScreen extends StatefulWidget {
 
 class _DownloadScreenState extends State<DownloadScreen> {
   final _urlCtrl    = TextEditingController();
+  final _titleCtrl  = TextEditingController();
   final _api        = ApiClient();
   final _downloader = DownloadService();
   final _db         = AppDatabase();
@@ -54,6 +56,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
       final info = await _api.fetchInfo(url);
       if (mounted) setState(() {
         _info = info;
+        _titleCtrl.text = info.title;
         _selectedQuality = info.qualities.isNotEmpty ? info.qualities.first : 'best';
         _fetchingInfo = false;
       });
@@ -72,6 +75,8 @@ class _DownloadScreenState extends State<DownloadScreen> {
         url: url,
         quality: _selectedQuality ?? 'best',
         albumId: _selectedAlbumId,
+        customTitle: _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null,
+        info: _info,
         onProgress: (p, step) {
           if (mounted) setState(() { _progress = p; _statusText = step; });
         },
@@ -79,6 +84,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
       if (mounted) {
         setState(() { _downloading = false; _statusText = ''; _info = null; });
         _urlCtrl.clear();
+        _titleCtrl.clear();
         _selectedQuality = null; _selectedAlbumId = null; _selectedAlbumName = null;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('✅ Видео сохранено!')));
@@ -131,7 +137,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
               ),
             ]),
 
-            // Инфо о видео
+            // Инфо о видео + переименование
             if (_info != null) ...[
               const SizedBox(height: 16),
               _card(children: [
@@ -149,9 +155,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
                     ),
                   const SizedBox(width: 12),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(_info!.title, maxLines: 2, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 4),
                     Row(children: [
                       _badge(_info!.platform.toUpperCase(), purple),
                       const SizedBox(width: 8),
@@ -160,6 +163,22 @@ class _DownloadScreenState extends State<DownloadScreen> {
                     ]),
                   ])),
                 ]),
+                const SizedBox(height: 12),
+                const Text('Название (можно изменить)',
+                    style: TextStyle(color: Colors.white54, fontSize: 11)),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _titleCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: InputDecoration(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.refresh, size: 18, color: Colors.white38),
+                      tooltip: 'Восстановить оригинальное название',
+                      onPressed: () => setState(() => _titleCtrl.text = _info!.title),
+                    ),
+                  ),
+                ),
               ]),
             ],
 
@@ -257,9 +276,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
   void _pickQuality() {
     final qualities = _info?.qualities ?? [];
-    showModalBottomSheet(context: context,
-      backgroundColor: const Color(0xFF16161E),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    showSafeModalBottomSheet(context: context,
       builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
         const Padding(padding: EdgeInsets.all(16),
             child: Text('Качество', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
@@ -269,15 +286,12 @@ class _DownloadScreenState extends State<DownloadScreen> {
               ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary) : null,
           onTap: () { setState(() => _selectedQuality = q); Navigator.pop(context); },
         )),
-        const SizedBox(height: 16),
       ]),
     );
   }
 
   void _pickAlbum() {
-    showModalBottomSheet(context: context,
-      backgroundColor: const Color(0xFF16161E),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    showSafeModalBottomSheet(context: context,
       builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
         const Padding(padding: EdgeInsets.all(16),
             child: Text('Выбрать альбом', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
@@ -291,7 +305,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
           onTap: () { setState(() { _selectedAlbumId = a.id; _selectedAlbumName = a.name; });
             Navigator.pop(context); },
         )),
-        const SizedBox(height: 16),
       ]),
     );
   }
@@ -317,5 +330,5 @@ class _DownloadScreenState extends State<DownloadScreen> {
   }
 
   @override
-  void dispose() { _urlCtrl.dispose(); super.dispose(); }
+  void dispose() { _urlCtrl.dispose(); _titleCtrl.dispose(); super.dispose(); }
 }

@@ -25,10 +25,16 @@ class DownloadService {
     _notifsInit = true;
   }
 
+  /// [info] — результат /api/info, если уже был получен (даёт duration,
+  ///          thumbnail URL, platform без повторного запроса).
+  /// [customTitle] — если задан и не пустой, используется вместо названия
+  ///          с сервера (переименование видео при скачивании).
   Future<Video> download({
     required String url,
     required String quality,
     int? albumId,
+    String? customTitle,
+    VideoInfo? info,
     void Function(double progress, String step)? onProgress,
   }) async {
     await initNotifications();
@@ -39,8 +45,6 @@ class DownloadService {
     final taskId = await _api.startDownload(url, quality);
 
     // 2. Polling прогресса
-    // Если сервер перезапустился во время обновления yt-dlp —
-    // ждём до 60 сек пока он поднимется и задача снова появится
     TaskProgress progress;
     int notFoundCount = 0;
     int errorCount = 0;
@@ -57,7 +61,6 @@ class DownloadService {
         final msg = e.toString();
 
         if (msg.contains('Задача не найдена')) {
-          // Сервер перезапустился — ждём пока задача появится снова
           notFoundCount++;
           if (notFoundCount <= maxNotFound) {
             onProgress?.call(0.01,
@@ -71,7 +74,6 @@ class DownloadService {
           );
         }
 
-        // Другие сетевые ошибки — даём 3 попытки
         errorCount++;
         if (errorCount > 3) {
           _notifs.cancel(42);
@@ -92,10 +94,17 @@ class DownloadService {
     }
 
     // 3. Скачиваем файл с сервера на телефон
-    onProgress?.call(0.99, 'Сохранение на телефон…');
+    onProgress?.call(0.97, 'Сохранение на телефон…');
     final dir = await _videosDir();
-    final rawFilename = progress.filename ?? 'video.mp4';
-    final safeFilename = rawFilename.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+
+    final displayTitle = (customTitle != null && customTitle.trim().isNotEmpty)
+        ? customTitle.trim()
+        : (progress.title ?? 'video');
+
+    final ext = (progress.filename != null && progress.filename!.contains('.'))
+        ? progress.filename!.split('.').last
+        : 'mp4';
+    final safeFilename = '${_sanitize(displayTitle)}_$taskId.$ext';
     final filePath = '${dir.path}/$safeFilename';
 
     try {
@@ -105,7 +114,7 @@ class DownloadService {
         onReceiveProgress: (received, total) {
           if (total > 0) {
             final mb = received / 1024 / 1024;
-            onProgress?.call(0.99, 'Сохранение… ${mb.toStringAsFixed(1)} MB');
+            onProgress?.call(0.97, 'Сохранение… ${mb.toStringAsFixed(1)} MB');
           }
         },
       );
@@ -114,24 +123,44 @@ class DownloadService {
       throw Exception('Ошибка при сохранении файла: $e');
     }
 
+    // 4. Скачиваем и сохраняем миниатюру (если есть URL от YouTube)
+    String? thumbPath;
+    final thumbUrl = info?.thumbnail;
+    if (thumbUrl != null && thumbUrl.isNotEmpty) {
+      onProgress?.call(0.99, 'Сохранение превью…');
+      thumbPath = await _downloadThumbnail(thumbUrl, taskId);
+    }
+
     _notifs.cancel(42);
-    _showDoneNotif(progress.title ?? safeFilename);
+    _showDoneNotif(displayTitle);
 
     final file = File(filePath);
     final fileSize = await file.exists() ? await file.length() : 0;
 
     final video = Video(
-      title: progress.title ?? safeFilename,
+      title: displayTitle,
       filePath: filePath,
+      thumbnailPath: thumbPath,
       sourceUrl: url,
-      platform: null,
-      duration: 0,
+      platform: info?.platform,
+      duration: info?.duration ?? 0,
       fileSize: fileSize,
       albumId: albumId,
     );
 
     final id = await _db.insertVideo(video);
     return video.copyWith(id: id, fileSize: fileSize);
+  }
+
+  Future<String?> _downloadThumbnail(String url, String taskId) async {
+    try {
+      final dir = await _thumbsDir();
+      final path = '${dir.path}/thumb_$taskId.jpg';
+      await _dio.download(url, path);
+      return path;
+    } catch (_) {
+      return null; // отсутствие превью не критично
+    }
   }
 
   Future<Directory> _videosDir() async {
@@ -141,7 +170,28 @@ class DownloadService {
     return dir;
   }
 
+  Future<Directory> _thumbsDir() async {
+    final base = await getApplicationDocumentsDirectory();
+    final dir  = Directory('${base.path}/thumbs');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
+
+  String _sanitize(String name) {
+    final clean = name
+        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return clean.length > 60 ? clean.substring(0, 60) : (clean.isEmpty ? 'video' : clean);
+  }
+
   Future<void> deleteVideoFile(String path) async {
+    final f = File(path);
+    if (await f.exists()) await f.delete();
+  }
+
+  Future<void> deleteThumbnail(String? path) async {
+    if (path == null) return;
     final f = File(path);
     if (await f.exists()) await f.delete();
   }

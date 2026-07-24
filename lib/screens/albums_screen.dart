@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/database.dart';
+import '../widgets/safe_bottom_sheet.dart';
 import '../widgets/video_card.dart';
+import 'album_video_picker_screen.dart';
 import 'player_screen.dart';
 
 class AlbumsScreen extends StatefulWidget {
@@ -14,9 +16,20 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
   List<Album> _albums = [];
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+    DBChangeNotifier.instance.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    DBChangeNotifier.instance.removeListener(_load);
+    super.dispose();
+  }
 
   Future<void> _load() async {
+    if (!mounted) return;
     final albums = await _db.getAlbums();
     if (mounted) setState(() => _albums = albums);
   }
@@ -38,7 +51,7 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
                 const SizedBox(height: 16),
                 const Text('No albums yet', style: TextStyle(fontSize: 20, color: Colors.white70)),
                 const SizedBox(height: 8),
-                Text('Tap + to create one', style: TextStyle(color: Colors.white38)),
+                const Text('Tap + to create one', style: TextStyle(color: Colors.white38)),
               ]))
             : RefreshIndicator(
                 onRefresh: _load,
@@ -84,9 +97,7 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
   }
 
   void _showOptions(Album album) {
-    showModalBottomSheet(context: context,
-      backgroundColor: const Color(0xFF16161E),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    showSafeModalBottomSheet(context: context,
       builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
         ListTile(leading: const Icon(Icons.edit), title: const Text('Rename'),
             onTap: () { Navigator.pop(context); _renameAlbum(album); }),
@@ -97,7 +108,6 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
               await _db.deleteAlbum(album.id!);
               _load();
             }),
-        const SizedBox(height: 16),
       ]),
     );
   }
@@ -169,19 +179,60 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   List<Video> _videos = [];
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+    DBChangeNotifier.instance.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    DBChangeNotifier.instance.removeListener(_load);
+    super.dispose();
+  }
 
   Future<void> _load() async {
+    if (!mounted) return;
     final v = await _db.getVideosByAlbum(widget.album.id!);
     if (mounted) setState(() => _videos = v);
+  }
+
+  Future<void> _addVideos() async {
+    await Navigator.push(context, MaterialPageRoute(
+      builder: (_) => AlbumVideoPickerScreen(
+        albumId: widget.album.id!,
+        albumName: widget.album.name,
+      ),
+    ));
+    _load();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.album.name)),
+      appBar: AppBar(
+        title: Text(widget.album.name),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline),
+            tooltip: 'Add videos',
+            onPressed: _addVideos,
+          ),
+        ],
+      ),
       body: _videos.isEmpty
-        ? const Center(child: Text('No videos in this album', style: TextStyle(color: Colors.white54)))
+        ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('📁', style: TextStyle(fontSize: 56)),
+            const SizedBox(height: 12),
+            const Text('No videos in this album',
+                style: TextStyle(color: Colors.white54)),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: _addVideos,
+              icon: const Icon(Icons.add),
+              label: const Text('Add videos'),
+            ),
+          ]))
         : GridView.builder(
             padding: const EdgeInsets.all(8),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -198,6 +249,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               },
             ),
           ),
+      floatingActionButton: _videos.isNotEmpty
+          ? FloatingActionButton(onPressed: _addVideos, child: const Icon(Icons.add))
+          : null,
     );
   }
 }

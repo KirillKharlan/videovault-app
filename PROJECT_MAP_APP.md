@@ -17,26 +17,45 @@ videovault-app/
 │   │                                     Модели: VideoInfo, TaskProgress
 │   ├── models/
 │   │   └── database.dart                ← SQLite (sqflite). Таблицы: albums, videos.
-│   │                                     Классы: Album, Video, AppDatabase (singleton)
+│   │                                     Классы: Album, Video, AppDatabase (singleton),
+│   │                                     DBChangeNotifier (реактивные обновления UI),
+│   │                                     normalizeForSearch (поиск без учёта пунктуации)
 │   ├── services/
-│   │   └── download_service.dart         ← Оркестрация скачивания:
-│   │                                     POST /api/download → task_id →
-│   │                                     polling /api/progress → скачивание
-│   │                                     файла с /api/file, сохранение в БД
+│   │   ├── download_service.dart         ← Оркестрация скачивания:
+│   │   │                                   POST /api/download → task_id →
+│   │   │                                   polling /api/progress → скачивание файла
+│   │   │                                   + миниатюры с /api/file, сохранение в БД
+│   │   └── gallery_import_service.dart    ← Импорт видео из галереи телефона
+│   │                                     (image_picker + video_thumbnail)
 │   ├── screens/
-│   │   ├── home_screen.dart              ← Список всех видео (главный экран)
-│   │   ├── albums_screen.dart             ← Список альбомов + создание/переим./удаление
+│   │   ├── home_screen.dart              ← Список всех видео (главный экран).
+│   │   │                                   Автообновление через DBChangeNotifier,
+│   │   │                                   импорт из галереи, поиск.
+│   │   ├── albums_screen.dart             ← Список альбомов + AlbumDetailScreen
+│   │   │                                   с кнопкой "Add videos"
+│   │   ├── album_video_picker_screen.dart  ← Мультивыбор видео для добавления
+│   │   │                                    в альбом (с нумерацией выбора)
 │   │   ├── download_screen.dart            ← Экран "Скачать видео": ввод URL,
-│   │   │                                    получение инфо, выбор качества/альбома
-│   │   └── player_screen.dart              ← Просмотр скачанного видео (video_player)
+│   │   │                                    получение инфо, редактирование
+│   │   │                                    названия, выбор качества/альбома
+│   │   └── player_screen.dart              ← Просмотр видео (video_player + chewie),
+│   │                                       слайдер громкости
 │   └── widgets/
-│       └── video_card.dart                 ← UI-карточка видео (превью+название)
+│       ├── video_card.dart                 ← UI-карточка видео. Поддерживает режим
+│       │                                     мультивыбора (selectionMode/selected/
+│       │                                     selectionOrder) для album_video_picker
+│       └── safe_bottom_sheet.dart           ← showSafeModalBottomSheet — обёртка
+│                                            над showModalBottomSheet с защитой от
+│                                            перекрытия системными кнопками навигации
 ├── android/
-│   ├── app/src/main/AndroidManifest.xml    ← разрешения, intent-filter для share
+│   ├── app/src/main/AndroidManifest.xml    ← разрешения (INTERNET, POST_NOTIFICATIONS,
+│   │                                        READ_MEDIA_VIDEO/IMAGES), intent-filter
+│   │                                        для share (SEND) и MAIN
 │   └── app/src/main/kotlin/.../MainActivity.kt
 ├── .github/workflows/build.yml              ← CI: сборка APK через GitHub Actions
 ├── pubspec.yaml                              ← зависимости (dio, sqflite, video_player,
-│                                               receive_sharing_intent, cached_network_image)
+│                                               receive_sharing_intent, cached_network_image,
+│                                               image_picker, video_thumbnail)
 └── README.md
 ```
 
@@ -91,3 +110,47 @@ download_screen.dart
    state management (`setState`, `StreamBuilder` если есть)
 4. Проблемы с APK/сборкой — смотри `.github/workflows/build.yml` и
    `pubspec.yaml` на предмет несовместимых версий пакетов
+
+## Новые фичи (второй раунд правок)
+
+- **Реактивные обновления**: `DBChangeNotifier.instance` — ChangeNotifier-синглтон
+  в database.dart. Все write-операции (insert/update/delete) вызывают `.bump()`.
+  HomeScreen/AlbumsScreen/AlbumDetailScreen подписываются в initState через
+  `addListener(_load)`, отписываются в dispose. Больше нет ручной кнопки Refresh.
+- **Мультивыбор видео в альбом**: AlbumDetailScreen → кнопка "+" →
+  AlbumVideoPickerScreen. Видео НЕ удаляются из общего списка (просто меняется
+  `album_id`). VideoCard поддерживает `selectionMode`/`selected`/`selectionOrder`
+  для подсветки и нумерации выбора.
+- **safe_bottom_sheet.dart**: все bottom sheets теперь через
+  `showSafeModalBottomSheet` вместо голого `showModalBottomSheet` — фикс
+  перекрытия системными кнопками навигации телефона.
+- **Громкость**: PlayerScreen — иконка в шапке открывает Slider (0-100%),
+  управляет `VideoPlayerController.setVolume()` напрямую, отдельно от
+  встроенного mute-переключателя Chewie.
+- **Переименование при скачивании**: DownloadScreen — поле "Название" после
+  получения инфо, редактируемое, с кнопкой сброса к оригиналу. Передаётся в
+  `DownloadService.download(customTitle: ...)`.
+- **Импорт из галереи**: `gallery_import_service.dart` — image_picker для
+  выбора видео + video_thumbnail для генерации превью + video_player для
+  чтения длительности. Кнопка на HomeScreen (иконка галереи в шапке).
+- **Поиск без учёта пунктуации**: `normalizeForSearch()` в database.dart —
+  убирает все не-буквенно-цифровые символы перед сравнением. searchVideos
+  теперь фильтрует в Dart (не SQL LIKE), т.к. нужна polnaya нормализация.
+- **Миниатюры YouTube**: при скачивании сервис скачивает превью по URL из
+  `VideoInfo.thumbnail` и сохраняет локально (`thumbs/thumb_<taskId>.jpg`),
+  путь пишется в `Video.thumbnailPath`. Раньше этого не было — карточки
+  показывали только заглушку.
+- **Длительность видео**: раньше `Video.duration` всегда сохранялся как 0.
+  Теперь `DownloadService.download()` принимает `VideoInfo? info` (уже
+  полученный через /api/info) и берёт `info.duration` напрямую — без лишнего
+  сетевого запроса.
+
+## Известные ограничения нового кода
+
+- Автоподгрузка (infinite scroll) НЕ реализована в классическом смысле —
+  вместо этого весь список подгружается сразу, но обновляется автоматически
+  (реактивно) без ручной кнопки. Для типичного личного использования (сотни,
+  не десятки тысяч видео) это нормально по производительности. Если библиотека
+  вырастет очень большой — тогда стоит добавить настоящую пагинацию с LIMIT/OFFSET.
+- video_thumbnail генерирует превью только для видео из галереи (локальный
+  импорт) — для скачанных с YouTube используется официальное превью с сервера.

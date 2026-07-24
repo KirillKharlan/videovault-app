@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/database.dart';
+import '../services/gallery_import_service.dart';
 import '../widgets/video_card.dart';
 import 'player_screen.dart';
 
@@ -11,22 +12,52 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _db = AppDatabase();
+  final _importer = GalleryImportService();
   List<Video> _videos = [];
   String _search = '';
   bool _loading = true;
+  bool _importing = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // Автообновление: если видео добавлено на другой вкладке (Download)
+    // или удалено/перемещено в плеере — список сам обновится, без кнопки.
+    DBChangeNotifier.instance.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    DBChangeNotifier.instance.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     final videos = _search.isEmpty
         ? await _db.getAllVideos()
         : await _db.searchVideos(_search);
     if (mounted) setState(() { _videos = videos; _loading = false; });
+  }
+
+  Future<void> _importFromGallery() async {
+    setState(() => _importing = true);
+    try {
+      final video = await _importer.importFromGallery();
+      if (mounted && video != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Video imported!')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ Import failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
   }
 
   @override
@@ -46,10 +77,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         fontWeight: FontWeight.bold,
                         color: Theme.of(context).colorScheme.primary)),
                 const Spacer(),
-                IconButton(
-                    icon: const Icon(Icons.refresh),
-                    onPressed: _load,
-                    color: Colors.white54),
+                _importing
+                    ? const SizedBox(width: 24, height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : IconButton(
+                        icon: const Icon(Icons.photo_library_outlined),
+                        tooltip: 'Import from gallery',
+                        onPressed: _importFromGallery,
+                        color: Colors.white54),
               ]),
             ),
 
@@ -76,7 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildContent() {
-    if (_loading) {
+    if (_loading && _videos.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_videos.isEmpty) {
@@ -87,7 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const Text('No videos yet',
               style: TextStyle(fontSize: 20, color: Colors.white70)),
           const SizedBox(height: 8),
-          Text('Go to Download tab to add videos',
+          const Text('Go to Download tab, or import from gallery',
               style: TextStyle(color: Colors.white38)),
         ]),
       );

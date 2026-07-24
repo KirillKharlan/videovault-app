@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
+import '../widgets/safe_bottom_sheet.dart';
 
 class PlayerScreen extends StatefulWidget {
   final Video video;
@@ -19,10 +20,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _error = false;
   final _db = AppDatabase();
 
+  bool _showVolumeSlider = false;
+  double _volume = 1.0;
+
   @override
   void initState() {
     super.initState();
-    // Landscape + portrait
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.landscapeLeft,
@@ -39,6 +42,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     _vpCtrl = VideoPlayerController.file(file);
     await _vpCtrl!.initialize();
+    await _vpCtrl!.setVolume(_volume);
     _chewieCtrl = ChewieController(
       videoPlayerController: _vpCtrl!,
       autoPlay: true,
@@ -57,11 +61,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _showOptions() {
-    showModalBottomSheet(
+    showSafeModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF16161E),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(padding: const EdgeInsets.all(16),
             child: Text(widget.video.title, maxLines: 2, overflow: TextOverflow.ellipsis,
@@ -81,7 +82,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
           title: const Text('Delete video', style: TextStyle(color: Colors.redAccent)),
           onTap: () { Navigator.pop(context); _deleteVideo(); },
         ),
-        const SizedBox(height: 16),
       ]),
     );
   }
@@ -89,38 +89,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _moveToAlbum() async {
     final albums = await _db.getAlbums();
     if (!mounted) return;
-    showModalBottomSheet(
+    showSafeModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF16161E),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
         const Padding(padding: EdgeInsets.all(16),
             child: Text('Move to album', style: TextStyle(fontWeight: FontWeight.bold))),
         ListTile(leading: const Icon(Icons.folder_off_outlined), title: const Text('No album'),
             onTap: () async {
-              await _db.updateVideo(Video(
-                id: widget.video.id, title: widget.video.title,
-                filePath: widget.video.filePath, albumId: null,
-                sourceUrl: widget.video.sourceUrl, platform: widget.video.platform,
-                duration: widget.video.duration, fileSize: widget.video.fileSize,
-              ));
+              await _db.updateVideo(widget.video.copyWith(clearAlbum: true));
               if (mounted) Navigator.pop(context);
             }),
         ...albums.map((a) => ListTile(
           leading: const Icon(Icons.folder_outlined),
           title: Text(a.name),
           onTap: () async {
-            await _db.updateVideo(Video(
-              id: widget.video.id, title: widget.video.title,
-              filePath: widget.video.filePath, albumId: a.id,
-              sourceUrl: widget.video.sourceUrl, platform: widget.video.platform,
-              duration: widget.video.duration, fileSize: widget.video.fileSize,
-            ));
+            await _db.updateVideo(widget.video.copyWith(albumId: a.id));
             if (mounted) Navigator.pop(context);
           },
         )),
-        const SizedBox(height: 16),
       ]),
     );
   }
@@ -135,7 +121,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         children: [
           _infoRow('Title', v.title),
           _infoRow('Platform', v.platform ?? 'unknown'),
-          _infoRow('Duration', v.durationFormatted),
+          _infoRow('Duration', v.durationFormatted.isEmpty ? 'unknown' : v.durationFormatted),
           _infoRow('Size', v.fileSizeFormatted),
           if (v.sourceUrl != null) _infoRow('Source', v.sourceUrl!),
         ],
@@ -163,6 +149,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           onPressed: () async {
             Navigator.pop(context);
             await DownloadService().deleteVideoFile(widget.video.filePath);
+            await DownloadService().deleteThumbnail(widget.video.thumbnailPath);
             await _db.deleteVideo(widget.video.id!);
             if (mounted) Navigator.pop(context);
           },
@@ -170,6 +157,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ),
       ],
     ));
+  }
+
+  IconData _volumeIcon() {
+    if (_volume <= 0) return Icons.volume_off;
+    if (_volume < 0.5) return Icons.volume_down;
+    return Icons.volume_up;
   }
 
   @override
@@ -185,9 +178,44 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Expanded(child: Text(widget.video.title, maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: Colors.white, fontSize: 14))),
+            IconButton(
+              icon: Icon(_volumeIcon()), color: Colors.white,
+              tooltip: 'Volume',
+              onPressed: () => setState(() => _showVolumeSlider = !_showVolumeSlider),
+            ),
             IconButton(icon: const Icon(Icons.more_vert), color: Colors.white,
                 onPressed: _showOptions),
           ]),
+
+          // Слайдер громкости (тонкая настройка, как на YouTube)
+          if (_showVolumeSlider)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                Icon(_volumeIcon(), color: Colors.white54, size: 18),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderThemeData(
+                      activeTrackColor: const Color(0xFF7C5CFC),
+                      inactiveTrackColor: const Color(0xFF2A2A38),
+                      thumbColor: const Color(0xFF7C5CFC),
+                      overlayColor: const Color(0x337C5CFC),
+                      trackHeight: 3,
+                    ),
+                    child: Slider(
+                      value: _volume, min: 0, max: 1,
+                      onChanged: (v) {
+                        setState(() => _volume = v);
+                        _vpCtrl?.setVolume(v);
+                      },
+                    ),
+                  ),
+                ),
+                SizedBox(width: 32, child: Text('${(_volume * 100).round()}%',
+                    style: const TextStyle(color: Colors.white54, fontSize: 11))),
+              ]),
+            ),
+
           // Player
           Expanded(child: _error
             ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [

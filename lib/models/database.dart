@@ -1,5 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+
+// ─── Reactive change notifier ────────────────────────────────────────────────
+//
+// Любой экран может подписаться на DBChangeNotifier.instance и автоматически
+// перезагружать данные при любом изменении БД (добавили видео на другой
+// вкладке — список на "Videos" сам обновится, без ручной кнопки Refresh).
+class DBChangeNotifier extends ChangeNotifier {
+  DBChangeNotifier._internal();
+  static final DBChangeNotifier instance = DBChangeNotifier._internal();
+
+  void bump() => notifyListeners();
+}
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 
@@ -85,23 +98,30 @@ class Video {
         addedAt: DateTime.fromMillisecondsSinceEpoch(m['added_at']),
       );
 
-  Video copyWith({int? id, String? title, String? filePath,
-      String? thumbnailPath, int? albumId, int? fileSize}) => Video(
+  Video copyWith({
+    int? id, String? title, String? filePath, String? thumbnailPath,
+    String? sourceUrl, String? platform, int? duration, int? fileSize,
+    int? albumId, bool clearAlbum = false,
+  }) => Video(
         id: id ?? this.id,
         title: title ?? this.title,
         filePath: filePath ?? this.filePath,
         thumbnailPath: thumbnailPath ?? this.thumbnailPath,
-        sourceUrl: sourceUrl,
-        platform: platform,
-        duration: duration,
+        sourceUrl: sourceUrl ?? this.sourceUrl,
+        platform: platform ?? this.platform,
+        duration: duration ?? this.duration,
         fileSize: fileSize ?? this.fileSize,
-        albumId: albumId ?? this.albumId,
+        albumId: clearAlbum ? null : (albumId ?? this.albumId),
         addedAt: addedAt,
       );
 
   String get durationFormatted {
+    if (duration <= 0) return '';
     final m = duration ~/ 60;
     final s = duration % 60;
+    if (m >= 60) {
+      return '${m ~/ 60}:${(m % 60).toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    }
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
@@ -110,6 +130,16 @@ class Video {
     if (fileSize < 1024 * 1024) return '${(fileSize / 1024).toStringAsFixed(1)} KB';
     return '${(fileSize / 1024 / 1024).toStringAsFixed(1)} MB';
   }
+}
+
+// ─── Search normalization ─────────────────────────────────────────────────────
+//
+// Убирает всё что не буква/цифра (пробелы, запятые, дефисы и т.п.) и приводит
+// к нижнему регистру. Так "бла бла бла" и "бла, бла, бла" совпадают при поиске.
+String normalizeForSearch(String s) {
+  return s
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
 }
 
 // ─── Database ─────────────────────────────────────────────────────────────────
@@ -168,17 +198,21 @@ class AppDatabase {
 
   Future<int> insertAlbum(Album album) async {
     final d = await db;
-    return d.insert('albums', album.toMap());
+    final id = await d.insert('albums', album.toMap());
+    DBChangeNotifier.instance.bump();
+    return id;
   }
 
   Future<void> updateAlbum(Album album) async {
     final d = await db;
     await d.update('albums', album.toMap(), where: 'id = ?', whereArgs: [album.id]);
+    DBChangeNotifier.instance.bump();
   }
 
   Future<void> deleteAlbum(int id) async {
     final d = await db;
     await d.delete('albums', where: 'id = ?', whereArgs: [id]);
+    DBChangeNotifier.instance.bump();
   }
 
   // ── Videos ─────────────────────────────────────────────────────────────
@@ -196,26 +230,43 @@ class AppDatabase {
     return rows.map(Video.fromMap).toList();
   }
 
+  /// Поиск игнорирует регистр и любые символы-разделители (запятые, дефисы,
+  /// пробелы и т.п.) — "бла бла бла" находит "бла, бла, бла".
   Future<List<Video>> searchVideos(String query) async {
-    final d = await db;
-    final rows = await d.query('videos',
-        where: 'title LIKE ?', whereArgs: ['%$query%'], orderBy: 'added_at DESC');
-    return rows.map(Video.fromMap).toList();
+    final all = await getAllVideos();
+    final normQuery = normalizeForSearch(query);
+    if (normQuery.isEmpty) return all;
+    return all.where((v) => normalizeForSearch(v.title).contains(normQuery)).toList();
   }
 
   Future<int> insertVideo(Video video) async {
     final d = await db;
-    return d.insert('videos', video.toMap());
+    final id = await d.insert('videos', video.toMap());
+    DBChangeNotifier.instance.bump();
+    return id;
   }
 
   Future<void> updateVideo(Video video) async {
     final d = await db;
     await d.update('videos', video.toMap(), where: 'id = ?', whereArgs: [video.id]);
+    DBChangeNotifier.instance.bump();
+  }
+
+  /// Массово присвоить альбом нескольким видео разом (для мультивыбора).
+  Future<void> setAlbumForVideos(List<int> videoIds, int? albumId) async {
+    final d = await db;
+    final batch = d.batch();
+    for (final id in videoIds) {
+      batch.update('videos', {'album_id': albumId}, where: 'id = ?', whereArgs: [id]);
+    }
+    await batch.commit(noResult: true);
+    DBChangeNotifier.instance.bump();
   }
 
   Future<void> deleteVideo(int id) async {
     final d = await db;
     await d.delete('videos', where: 'id = ?', whereArgs: [id]);
+    DBChangeNotifier.instance.bump();
   }
 
   Future<Video?> getVideoById(int id) async {
