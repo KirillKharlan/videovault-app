@@ -40,7 +40,9 @@ dependencies:
 
   # Импорт видео из галереи телефона
   image_picker: ^1.1.2
-  video_thumbnail: ^0.5.3
+  # video_thumbnail заброшен — старый build.gradle зовёт jcenter(), который
+  # не существует и ломает сборку на AGP 9+. Используем поддерживаемый форк.
+  flutter_video_thumbnail_plus: ^1.0.5
 
 dev_dependencies:
   flutter_test:

@@ -206,6 +206,12 @@
       "languageVersion": "3.10"
     },
     {
+      "name": "flutter_video_thumbnail_plus",
+      "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_video_thumbnail_plus-1.0.5",
+      "packageUri": "lib/",
+      "languageVersion": "2.16"
+    },
+    {
       "name": "flutter_web_plugins",
       "rootUri": "file:///C:/flutr/flutter/packages/flutter_web_plugins",
       "packageUri": "lib/",
@@ -714,12 +720,6 @@
       "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/video_player_web-2.4.0",
       "packageUri": "lib/",
       "languageVersion": "3.6"
-    },
-    {
-      "name": "video_thumbnail",
-      "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/video_thumbnail-0.5.6",
-      "packageUri": "lib/",
-      "languageVersion": "2.16"
     },
     {
       "name": "vm_service",

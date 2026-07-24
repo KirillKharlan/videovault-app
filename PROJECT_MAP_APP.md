@@ -26,7 +26,7 @@ videovault-app/
 │   │   │                                   polling /api/progress → скачивание файла
 │   │   │                                   + миниатюры с /api/file, сохранение в БД
 │   │   └── gallery_import_service.dart    ← Импорт видео из галереи телефона
-│   │                                     (image_picker + video_thumbnail)
+│   │                                     (image_picker + flutter_video_thumbnail_plus)
 │   ├── screens/
 │   │   ├── home_screen.dart              ← Список всех видео (главный экран).
 │   │   │                                   Автообновление через DBChangeNotifier,
@@ -55,7 +55,7 @@ videovault-app/
 ├── .github/workflows/build.yml              ← CI: сборка APK через GitHub Actions
 ├── pubspec.yaml                              ← зависимости (dio, sqflite, video_player,
 │                                               receive_sharing_intent, cached_network_image,
-│                                               image_picker, video_thumbnail)
+│                                               image_picker, flutter_video_thumbnail_plus)
 └── README.md
 ```
 
@@ -131,7 +131,7 @@ download_screen.dart
   получения инфо, редактируемое, с кнопкой сброса к оригиналу. Передаётся в
   `DownloadService.download(customTitle: ...)`.
 - **Импорт из галереи**: `gallery_import_service.dart` — image_picker для
-  выбора видео + video_thumbnail для генерации превью + video_player для
+  выбора видео + flutter_video_thumbnail_plus для генерации превью + video_player для
   чтения длительности. Кнопка на HomeScreen (иконка галереи в шапке).
 - **Поиск без учёта пунктуации**: `normalizeForSearch()` в database.dart —
   убирает все не-буквенно-цифровые символы перед сравнением. searchVideos
@@ -152,5 +152,17 @@ download_screen.dart
   (реактивно) без ручной кнопки. Для типичного личного использования (сотни,
   не десятки тысяч видео) это нормально по производительности. Если библиотека
   вырастет очень большой — тогда стоит добавить настоящую пагинацию с LIMIT/OFFSET.
-- video_thumbnail генерирует превью только для видео из галереи (локальный
+- flutter_video_thumbnail_plus генерирует превью только для видео из галереи (локальный
   импорт) — для скачанных с YouTube используется официальное превью с сервера.
+
+## Фикс сборки (video_thumbnail → flutter_video_thumbnail_plus)
+
+`video_thumbnail: ^0.5.3` был заброшен — его `android/build.gradle` вызывает
+устаревший `jcenter()`, которого больше не существует, что ломает сборку на
+AGP 9+ ("Could not find method jcenter()"). Заменён на активно поддерживаемый
+`flutter_video_thumbnail_plus: ^1.0.5` — тот же функционал, другой API:
+- Класс: `FlutterVideoThumbnailPlus` (не `VideoThumbnail`)
+- `imageFormat: ImageFormat.png` (без namespace-префикса, само название пакета
+  уже уникально)
+- `thumbnailPath` — теперь это ПОЛНЫЙ путь к файлу назначения (с расширением),
+  а не путь к директории как было в старом пакете
