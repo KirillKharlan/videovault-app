@@ -244,7 +244,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               video: _videos[i],
               onTap: () async {
                 await Navigator.push(ctx,
-                    MaterialPageRoute(builder: (_) => PlayerScreen(video: _videos[i])));
+                    MaterialPageRoute(builder: (_) => PlayerScreen(
+                      video: _videos[i],
+                      playlist: _videos,
+                      initialIndex: i,
+                    )));
                 _load();
               },
             ),

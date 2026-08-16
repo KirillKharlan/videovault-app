@@ -15,6 +15,22 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
+    // Постоянный keystore (android/keystore/videovault.keystore, закоммичен в репо).
+    // Раньше здесь неявно использовался debug-конфиг по умолчанию — на GitHub
+    // Actions он создаётся заново на каждом раннере => разная подпись каждой
+    // сборки => Android требует полного удаления вместо обновления поверх.
+    // Переопределяем "debug" конфиг на наш зафиксированный файл — release
+    // builds уже ссылаются на signingConfigs.getByName("debug"), так что
+    // больше ничего менять не нужно.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("../keystore/videovault.keystore")
+            storePassword = "videovault123"
+            keyAlias = "videovault"
+            keyPassword = "videovault123"
+        }
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.videovault"

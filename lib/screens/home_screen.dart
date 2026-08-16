@@ -142,7 +142,11 @@ class _HomeScreenState extends State<HomeScreen> {
           video: _videos[i],
           onTap: () async {
             await Navigator.push(ctx,
-                MaterialPageRoute(builder: (_) => PlayerScreen(video: _videos[i])));
+                MaterialPageRoute(builder: (_) => PlayerScreen(
+                  video: _videos[i],
+                  playlist: _videos,
+                  initialIndex: i,
+                )));
             _load();
           },
         ),

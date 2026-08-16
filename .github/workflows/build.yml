@@ -28,7 +28,9 @@ jobs:
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        # --build-number растёт с каждым запуском (номер CI-рана) — иначе
+        # versionCode всегда одинаковый и Android не предлагает обновление.
+        run: flutter build apk --release --build-number=${{ github.run_number }}
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4

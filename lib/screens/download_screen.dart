@@ -68,6 +68,14 @@ class _DownloadScreenState extends State<DownloadScreen> {
   Future<void> _download() async {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty || _downloading) return;
+
+    // Если инфо ещё не получена для этого URL — получаем автоматически,
+    // чтобы не нужно было нажимать две кнопки подряд.
+    if (_info == null) {
+      await _fetchInfo();
+      if (_info == null) return; // фетч не удался — ошибка уже показана
+    }
+
     setState(() { _downloading = true; _progress = 0; _statusText = 'Запуск…'; });
 
     try {
@@ -85,7 +93,9 @@ class _DownloadScreenState extends State<DownloadScreen> {
         setState(() { _downloading = false; _statusText = ''; _info = null; });
         _urlCtrl.clear();
         _titleCtrl.clear();
-        _selectedQuality = null; _selectedAlbumId = null; _selectedAlbumName = null;
+        _selectedQuality = null;
+        // Альбом НЕ сбрасываем — остаётся выбранным для следующего скачивания.
+        // Пользователь может поменять его вручную через _pickAlbum().
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('✅ Видео сохранено!')));
       }
@@ -234,12 +244,14 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: _downloading ? null : _download,
-              icon: _downloading
+              onPressed: (_downloading || _fetchingInfo) ? null : _download,
+              icon: (_downloading || _fetchingInfo)
                   ? const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.download),
-              label: Text(_downloading ? 'Загружается…' : 'Скачать'),
+              label: Text(_downloading
+                  ? 'Загружается…'
+                  : (_fetchingInfo ? 'Получение информации…' : 'Скачать')),
             ),
           ]),
         ),
