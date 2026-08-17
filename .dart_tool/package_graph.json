@@ -24,7 +24,8 @@
         "share_plus",
         "sqflite",
         "timeago",
-        "video_player"
+        "video_player",
+        "video_player_pip"
       ],
       "devDependencies": [
         "flutter_lints",
@@ -54,6 +55,15 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "flutter_video_thumbnail_plus",
+      "version": "1.0.5",
+      "dependencies": [
+        "flutter",
+        "flutter_web_plugins",
+        "plugin_platform_interface"
       ]
     },
     {
@@ -169,6 +179,18 @@
         "path_provider_linux",
         "path_provider_platform_interface",
         "path_provider_windows"
+      ]
+    },
+    {
+      "name": "video_player_pip",
+      "version": "0.0.10",
+      "dependencies": [
+        "flutter",
+        "html",
+        "plugin_platform_interface",
+        "video_player_android",
+        "video_player_avfoundation",
+        "video_player_platform_interface"
       ]
     },
     {
@@ -332,6 +354,20 @@
       ]
     },
     {
+      "name": "plugin_platform_interface",
+      "version": "2.1.8",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
+      "name": "flutter_web_plugins",
+      "version": "0.0.0",
+      "dependencies": [
+        "flutter"
+      ]
+    },
+    {
       "name": "image_picker_windows",
       "version": "0.2.2",
       "dependencies": [
@@ -397,13 +433,6 @@
         "flutter",
         "flutter_plugin_android_lifecycle",
         "image_picker_platform_interface",
-        "meta"
-      ]
-    },
-    {
-      "name": "plugin_platform_interface",
-      "version": "2.1.8",
-      "dependencies": [
         "meta"
       ]
     },
@@ -528,13 +557,6 @@
         "path_provider",
         "plugin_platform_interface",
         "uuid"
-      ]
-    },
-    {
-      "name": "flutter_web_plugins",
-      "version": "0.0.0",
-      "dependencies": [
-        "flutter"
       ]
     },
     {
@@ -684,6 +706,40 @@
       ]
     },
     {
+      "name": "video_player_platform_interface",
+      "version": "6.9.0",
+      "dependencies": [
+        "flutter",
+        "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "video_player_avfoundation",
+      "version": "2.11.0",
+      "dependencies": [
+        "flutter",
+        "meta",
+        "video_player_platform_interface"
+      ]
+    },
+    {
+      "name": "video_player_android",
+      "version": "2.11.0",
+      "dependencies": [
+        "flutter",
+        "meta",
+        "video_player_platform_interface"
+      ]
+    },
+    {
+      "name": "html",
+      "version": "0.15.6",
+      "dependencies": [
+        "csslib",
+        "source_span"
+      ]
+    },
+    {
       "name": "wakelock_plus",
       "version": "1.5.2",
       "dependencies": [
@@ -719,40 +775,6 @@
         "flutter_web_plugins",
         "video_player_platform_interface",
         "web"
-      ]
-    },
-    {
-      "name": "video_player_platform_interface",
-      "version": "6.9.0",
-      "dependencies": [
-        "flutter",
-        "plugin_platform_interface"
-      ]
-    },
-    {
-      "name": "video_player_avfoundation",
-      "version": "2.11.0",
-      "dependencies": [
-        "flutter",
-        "meta",
-        "video_player_platform_interface"
-      ]
-    },
-    {
-      "name": "video_player_android",
-      "version": "2.11.0",
-      "dependencies": [
-        "flutter",
-        "meta",
-        "video_player_platform_interface"
-      ]
-    },
-    {
-      "name": "html",
-      "version": "0.15.6",
-      "dependencies": [
-        "csslib",
-        "source_span"
       ]
     },
     {
@@ -1005,6 +1027,13 @@
       ]
     },
     {
+      "name": "csslib",
+      "version": "1.0.2",
+      "dependencies": [
+        "source_span"
+      ]
+    },
+    {
       "name": "package_info_plus",
       "version": "9.0.1",
       "dependencies": [
@@ -1034,13 +1063,6 @@
       "version": "1.0.0",
       "dependencies": [
         "flutter"
-      ]
-    },
-    {
-      "name": "csslib",
-      "version": "1.0.2",
-      "dependencies": [
-        "source_span"
       ]
     },
     {
@@ -1159,15 +1181,6 @@
         "collection",
         "meta",
         "pub_semver"
-      ]
-    },
-    {
-      "name": "flutter_video_thumbnail_plus",
-      "version": "1.0.5",
-      "dependencies": [
-        "flutter",
-        "flutter_web_plugins",
-        "plugin_platform_interface"
       ]
     }
   ],

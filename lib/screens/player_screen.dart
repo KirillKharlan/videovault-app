@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_player_pip/index.dart';
+import 'package:video_player_pip/index.dart' hide VideoPlayerController;
 import 'package:chewie/chewie.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
