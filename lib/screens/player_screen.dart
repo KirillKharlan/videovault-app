@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_player_pip/index.dart' hide VideoPlayerController;
 import 'package:chewie/chewie.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
@@ -49,8 +48,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Duration? _repeatEnd;
   bool _endHandled = false;
 
-  bool _pipSupported = false;
-
   @override
   void initState() {
     super.initState();
@@ -60,17 +57,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    _checkPipSupport();
     _initPlayer(_currentVideo);
-  }
-
-  Future<void> _checkPipSupport() async {
-    try {
-      final supported = await VideoPlayerPip.isPipSupported();
-      if (mounted) setState(() => _pipSupported = supported);
-    } catch (_) {
-      if (mounted) setState(() => _pipSupported = false);
-    }
   }
 
   bool get _hasNext =>
@@ -225,22 +212,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
-  Future<void> _enterPip() async {
-    final ctrl = _vpCtrl;
-    if (ctrl == null || !ctrl.value.isInitialized) return;
-    final aspect = ctrl.value.aspectRatio;
-    const width = 300;
-    final height = (width / aspect).round();
-    try {
-      await ctrl.enterPipMode(width: width, height: height);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PiP недоступен на этом устройстве: $e')));
-      }
-    }
-  }
-
   void _showOptions() {
     showSafeModalBottomSheet(
       context: context,
@@ -369,13 +340,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
               tooltip: 'Repeat',
               onPressed: _toggleLoop,
             ),
-            if (_pipSupported)
-              IconButton(
-                icon: const Icon(Icons.picture_in_picture_alt),
-                color: Colors.white,
-                tooltip: 'Picture-in-picture',
-                onPressed: _enterPip,
-              ),
             IconButton(icon: const Icon(Icons.more_vert), color: Colors.white,
                 onPressed: _showOptions),
           ]),

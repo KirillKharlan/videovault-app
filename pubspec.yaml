@@ -21,7 +21,6 @@ dependencies:
   # Видеоплеер
   video_player: ^2.8.6
   chewie: ^1.8.1                   # красивый UI поверх video_player
-  video_player_pip: ^0.0.10        # Picture-in-Picture для video_player
 
   # Хранение файлов
   path_provider: ^2.1.3
