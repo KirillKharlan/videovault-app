@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
+import '../services/pip_service.dart';
 import '../widgets/safe_bottom_sheet.dart';
 
 class PlayerScreen extends StatefulWidget {
@@ -48,6 +49,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Duration? _repeatEnd;
   bool _endHandled = false;
 
+  // ── Picture-in-Picture ───────────────────────────────────────────────────
+  bool _pipSupported = false;
+  bool _isInPip = false;
+  bool _lastAutoEnterState = false; // чтобы не спамить нативный вызов лишний раз
+
   @override
   void initState() {
     super.initState();
@@ -57,7 +63,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+    PipService.instance.addListener(_onPipModeChanged);
+    _checkPipSupport();
     _initPlayer(_currentVideo);
+  }
+
+  Future<void> _checkPipSupport() async {
+    final supported = await PipService.instance.isPipSupported();
+    if (mounted) setState(() => _pipSupported = supported);
+  }
+
+  void _onPipModeChanged(bool isInPip) {
+    if (mounted) setState(() => _isInPip = isInPip);
+  }
+
+  /// Синхронизирует с нативной стороной: разрешён ли автовход в PiP прямо
+  /// сейчас (только пока видео реально играет — пауза не должна триггерить PiP).
+  void _syncAutoEnterPip() {
+    if (!_pipSupported) return;
+    final playing = _vpCtrl?.value.isPlaying ?? false;
+    if (playing == _lastAutoEnterState) return;
+    _lastAutoEnterState = playing;
+    final aspect = _vpCtrl?.value.aspectRatio ?? (16 / 9);
+    PipService.instance.setAutoEnter(playing, aspectRatio: aspect);
   }
 
   bool get _hasNext =>
@@ -76,6 +104,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _repeatStart = null;
     _repeatEnd = null;
     _endHandled = false;
+    _lastAutoEnterState = false;
 
     _chewieCtrl?.dispose();
     await _vpCtrl?.dispose();
@@ -105,6 +134,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _onPositionChanged() {
     final ctrl = _vpCtrl;
     if (ctrl == null || !ctrl.value.isInitialized) return;
+    _syncAutoEnterPip();
     final pos = ctrl.value.position;
     final dur = ctrl.value.duration;
 
@@ -131,6 +161,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() { _isLoadingNext = true; _currentIndex++; });
     _currentVideo = widget.playlist![_currentIndex];
     await _initPlayer(_currentVideo);
+  }
+
+  Future<void> _enterPipManually() async {
+    final aspect = _vpCtrl?.value.aspectRatio ?? (16 / 9);
+    await PipService.instance.enterPip(aspectRatio: aspect);
   }
 
   void _toggleLoop() {
@@ -319,6 +354,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // В режиме PiP показываем ТОЛЬКО видео, без элементов управления —
+    // так рекомендует сама документация Android: минимальный UI даёт
+    // лучший опыт в маленьком окошке, где тач по мелким виджетам всё
+    // равно неудобен. Раскрытие обратно в полноэкранный режим и закрытие
+    // окна обеспечивает сама система.
+    if (_isInPip) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: (_chewieCtrl == null || _error)
+            ? const SizedBox.shrink()
+            : Center(
+                child: AspectRatio(
+                  aspectRatio: _vpCtrl?.value.aspectRatio ?? (16 / 9),
+                  child: VideoPlayer(_vpCtrl!),
+                ),
+              ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -340,6 +394,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
               tooltip: 'Repeat',
               onPressed: _toggleLoop,
             ),
+            if (_pipSupported)
+              IconButton(
+                icon: const Icon(Icons.picture_in_picture_alt),
+                color: Colors.white,
+                tooltip: 'Picture-in-picture',
+                onPressed: _enterPipManually,
+              ),
             IconButton(icon: const Icon(Icons.more_vert), color: Colors.white,
                 onPressed: _showOptions),
           ]),
@@ -433,6 +494,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    PipService.instance.removeListener(_onPipModeChanged);
+    if (_pipSupported) PipService.instance.setAutoEnter(false);
     _vpCtrl?.removeListener(_onPositionChanged);
     _chewieCtrl?.dispose();
     _vpCtrl?.dispose();
