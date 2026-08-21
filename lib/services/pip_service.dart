@@ -14,6 +14,15 @@ class PipService {
 
   final List<void Function(bool isInPip)> _listeners = [];
 
+  // Колбэки для кнопок действий в PiP-окне и в уведомлении фонового
+  // воспроизведения. Регистрируются ОДИН РАЗ в PlaybackManager (не в
+  // PlayerScreen!) — иначе после сворачивания в фон и закрытия экрана
+  // плеера кнопки в уведомлении перестанут работать.
+  void Function()? onPlayPauseAction;
+  void Function()? onSkipNextAction;
+  void Function()? onForward10Action;
+  void Function()? onStopAction;
+
   void addListener(void Function(bool isInPip) listener) {
     _listeners.add(listener);
     if (_listeners.length == 1) {
@@ -29,12 +38,66 @@ class PipService {
   }
 
   Future<dynamic> _handleMethodCall(MethodCall call) async {
-    if (call.method == 'onPipModeChanged') {
-      _isInPip = call.arguments as bool;
-      for (final l in List.of(_listeners)) {
-        l(_isInPip);
-      }
+    switch (call.method) {
+      case 'onPipModeChanged':
+        _isInPip = call.arguments as bool;
+        for (final l in List.of(_listeners)) {
+          l(_isInPip);
+        }
+        break;
+      case 'pipAction_playPause':
+        onPlayPauseAction?.call();
+        break;
+      case 'pipAction_skipNext':
+        onSkipNextAction?.call();
+        break;
+      case 'pipAction_forward10':
+        onForward10Action?.call();
+        break;
+      case 'pipAction_stop':
+        onStopAction?.call();
+        break;
     }
+  }
+
+  /// Обновляет состояние (играет/пауза, есть ли следующее видео, название) —
+  /// влияет на панель действий системного PiP.
+  Future<void> updateState({required bool isPlaying, required bool hasNext, String? title}) async {
+    try {
+      await _channel.invokeMethod('updatePipState', {
+        'isPlaying': isPlaying,
+        'hasNext': hasNext,
+        if (title != null) 'title': title,
+      });
+    } catch (_) {
+      // Не критично — просто иконки в панели действий не обновятся идеально.
+    }
+  }
+
+  // ── Фоновое воспроизведение (foreground service + уведомление) ─────────
+
+  Future<void> startBackgroundPlayback({required String title, required bool isPlaying}) async {
+    try {
+      await _channel.invokeMethod('startBackgroundService', {
+        'title': title,
+        'isPlaying': isPlaying,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> updateBackgroundNotification({required String title, required bool isPlaying}) async {
+    try {
+      await _channel.invokeMethod('updateBackgroundNotification', {
+        'title': title,
+        'isPlaying': isPlaying,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> stopBackgroundPlayback() async {
+    try {
+      await _channel.invokeMethod('stopBackgroundService');
+    } catch (_) {}
   }
 
   Future<bool> isPipSupported() async {

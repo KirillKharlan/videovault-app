@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
 
@@ -25,6 +27,45 @@ class DownloadService {
     _notifsInit = true;
   }
 
+  /// Повторяет [action] при сетевых сбоях (обрыв соединения, таймаут,
+  /// DNS-ошибка) — именно такие ошибки типичны когда сервер "просыпается"
+  /// после сна или Wi-Fi на телефоне на секунду проседает. Не повторяет
+  /// ошибки, пришедшие явно ОТ сервера (например "видео недоступно") —
+  /// они осмысленные и повтор их не исправит.
+  Future<T> _withRetry<T>(
+    Future<T> Function() action, {
+    int maxAttempts = 3,
+    Duration delay = const Duration(seconds: 3),
+    void Function(int attempt)? onRetry,
+  }) async {
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await action();
+      } catch (e) {
+        final isNetworkError = _isNetworkError(e);
+        final isLastAttempt = attempt == maxAttempts;
+        if (!isNetworkError || isLastAttempt) rethrow;
+        onRetry?.call(attempt);
+        await Future.delayed(delay);
+      }
+    }
+    throw Exception('Unreachable');
+  }
+
+  bool _isNetworkError(Object e) {
+    if (e is SocketException) return true;
+    if (e is TimeoutException) return true;
+    if (e is http.ClientException) return true; // из api_client.dart (package:http)
+    if (e is DioException) {
+      return e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout ||
+          e.type == DioExceptionType.unknown;
+    }
+    return false;
+  }
+
   /// [info] — результат /api/info, если уже был получен (даёт duration,
   ///          thumbnail URL, platform без повторного запроса).
   /// [customTitle] — если задан и не пустой, используется вместо названия
@@ -38,11 +79,37 @@ class DownloadService {
     void Function(double progress, String step)? onProgress,
   }) async {
     await initNotifications();
+    // Не даём телефону "усыпить" сеть/CPU на время всего скачивания —
+    // особенно важно на прошивках с агрессивным энергосбережением.
+    await WakelockPlus.enable();
+
+    try {
+      return await _doDownload(
+        url: url, quality: quality, albumId: albumId,
+        customTitle: customTitle, info: info, onProgress: onProgress,
+      );
+    } finally {
+      await WakelockPlus.disable();
+    }
+  }
+
+  Future<Video> _doDownload({
+    required String url,
+    required String quality,
+    int? albumId,
+    String? customTitle,
+    VideoInfo? info,
+    void Function(double progress, String step)? onProgress,
+  }) async {
     onProgress?.call(0, 'Запуск загрузки…');
     _showNotif(0, 'Запуск…');
 
-    // 1. Старт задачи — таймаут 90 сек (сервер может просыпаться)
-    final taskId = await _api.startDownload(url, quality);
+    // 1. Старт задачи — с ретраями на случай сетевого сбоя именно в
+    //    момент подключения (сервер только проснулся, Wi-Fi проседает).
+    final taskId = await _withRetry(
+      () => _api.startDownload(url, quality),
+      onRetry: (attempt) => onProgress?.call(0, 'Проблема сети, повтор ($attempt/3)…'),
+    );
 
     // 2. Polling прогресса
     TaskProgress progress;
@@ -75,10 +142,11 @@ class DownloadService {
         }
 
         errorCount++;
-        if (errorCount > 3) {
+        if (errorCount > 5) {
           _notifs.cancel(42);
           throw Exception('Потеряно соединение с сервером: $e');
         }
+        onProgress?.call(0.01, 'Проблема сети, попытка $errorCount/5…');
         continue;
       }
 
@@ -93,7 +161,7 @@ class DownloadService {
       if (progress.isDone) break;
     }
 
-    // 3. Скачиваем файл с сервера на телефон
+    // 3. Скачиваем файл с сервера на телефон (тоже с ретраями)
     onProgress?.call(0.97, 'Сохранение на телефон…');
     final dir = await _videosDir();
 
@@ -108,15 +176,18 @@ class DownloadService {
     final filePath = '${dir.path}/$safeFilename';
 
     try {
-      await _dio.download(
-        _api.fileUrl(taskId),
-        filePath,
-        onReceiveProgress: (received, total) {
-          if (total > 0) {
-            final mb = received / 1024 / 1024;
-            onProgress?.call(0.97, 'Сохранение… ${mb.toStringAsFixed(1)} MB');
-          }
-        },
+      await _withRetry(
+        () => _dio.download(
+          _api.fileUrl(taskId),
+          filePath,
+          onReceiveProgress: (received, total) {
+            if (total > 0) {
+              final mb = received / 1024 / 1024;
+              onProgress?.call(0.97, 'Сохранение… ${mb.toStringAsFixed(1)} MB');
+            }
+          },
+        ),
+        onRetry: (attempt) => onProgress?.call(0.97, 'Проблема сети при сохранении, повтор ($attempt/3)…'),
       );
     } catch (e) {
       _notifs.cancel(42);
