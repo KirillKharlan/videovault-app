@@ -429,7 +429,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: true,
-      onPopInvokedWithPop: (didPop, result) {
+      onPopInvokedWithResult: (didPop, result) {
         if (!didPop) return;
         // Если ушли через кнопку сворачивания — не останавливаем плеер,
         // он уже переведён в мини-режим менеджером. Во всех остальных

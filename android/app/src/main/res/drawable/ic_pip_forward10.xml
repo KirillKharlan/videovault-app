@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Круговая стрелка "перемотать вперёд" -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12,5 V2 L16,6 L12,10 V7 C8.7,7 6,9.7 6,13 C6,16.3 8.7,19 12,19 C15.3,19 18,16.3 18,13 H20 C20,17.4 16.4,21 12,21 C7.6,21 4,17.4 4,13 C4,8.6 7.6,5 12,5 Z" />
+    <!-- "10" под стрелкой -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M8.3,15.8 V12.6 L7.5,13.1 V12.1 L8.4,11.5 H9.3 V15.8 Z M11.6,15.9 C10.7,15.9 10.1,15.2 10.1,13.65 C10.1,12.1 10.7,11.4 11.6,11.4 C12.5,11.4 13.1,12.1 13.1,13.65 C13.1,15.2 12.5,15.9 11.6,15.9 Z M11.6,15.05 C11.95,15.05 12.15,14.65 12.15,13.65 C12.15,12.65 11.95,12.25 11.6,12.25 C11.25,12.25 11.05,12.65 11.05,13.65 C11.05,14.65 11.25,15.05 11.6,15.05 Z" />
+</vector>

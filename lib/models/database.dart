@@ -132,6 +132,71 @@ class Video {
   }
 }
 
+class RepeatRange {
+  final int? id;
+  final int videoId;
+  final String label;
+  final int startMs;
+  final int endMs;
+  final bool isDefault;
+  final String endBehavior; // 'loop' | 'next'
+
+  RepeatRange({
+    this.id,
+    required this.videoId,
+    required this.label,
+    required this.startMs,
+    required this.endMs,
+    this.isDefault = false,
+    this.endBehavior = 'loop',
+  });
+
+  Duration get start => Duration(milliseconds: startMs);
+  Duration get end => Duration(milliseconds: endMs);
+
+  String get rangeLabel {
+    String fmt(Duration d) {
+      final m = d.inMinutes;
+      final s = d.inSeconds % 60;
+      return '$m:${s.toString().padLeft(2, '0')}';
+    }
+    return '${fmt(start)} — ${fmt(end)}';
+  }
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'video_id': videoId,
+        'label': label,
+        'start_ms': startMs,
+        'end_ms': endMs,
+        'is_default': isDefault ? 1 : 0,
+        'end_behavior': endBehavior,
+      };
+
+  factory RepeatRange.fromMap(Map<String, dynamic> m) => RepeatRange(
+        id: m['id'],
+        videoId: m['video_id'],
+        label: m['label'],
+        startMs: m['start_ms'],
+        endMs: m['end_ms'],
+        isDefault: (m['is_default'] ?? 0) == 1,
+        endBehavior: m['end_behavior'] ?? 'loop',
+      );
+
+  RepeatRange copyWith({
+    int? id, int? videoId, String? label, int? startMs, int? endMs,
+    bool? isDefault, String? endBehavior,
+  }) => RepeatRange(
+        id: id ?? this.id,
+        videoId: videoId ?? this.videoId,
+        label: label ?? this.label,
+        startMs: startMs ?? this.startMs,
+        endMs: endMs ?? this.endMs,
+        isDefault: isDefault ?? this.isDefault,
+        endBehavior: endBehavior ?? this.endBehavior,
+      );
+}
+
 // ─── Search normalization ─────────────────────────────────────────────────────
 //
 // Убирает всё что не буква/цифра (пробелы, запятые, дефисы и т.п.) и приводит
@@ -160,7 +225,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'videovault.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE albums (
@@ -184,6 +249,32 @@ class AppDatabase {
             added_at INTEGER NOT NULL
           )
         ''');
+        await db.execute('''
+          CREATE TABLE repeat_ranges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+            label TEXT NOT NULL,
+            start_ms INTEGER NOT NULL,
+            end_ms INTEGER NOT NULL,
+            is_default INTEGER DEFAULT 0,
+            end_behavior TEXT DEFAULT 'loop'
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS repeat_ranges (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+              label TEXT NOT NULL,
+              start_ms INTEGER NOT NULL,
+              end_ms INTEGER NOT NULL,
+              is_default INTEGER DEFAULT 0,
+              end_behavior TEXT DEFAULT 'loop'
+            )
+          ''');
+        }
       },
     );
   }
@@ -273,5 +364,57 @@ class AppDatabase {
     final d = await db;
     final rows = await d.query('videos', where: 'id = ?', whereArgs: [id]);
     return rows.isNotEmpty ? Video.fromMap(rows.first) : null;
+  }
+
+  // ── Repeat ranges ─────────────────────────────────────────────────────
+
+  Future<List<RepeatRange>> getRangesForVideo(int videoId) async {
+    final d = await db;
+    final rows = await d.query('repeat_ranges',
+        where: 'video_id = ?', whereArgs: [videoId], orderBy: 'id ASC');
+    return rows.map(RepeatRange.fromMap).toList();
+  }
+
+  Future<RepeatRange?> getDefaultRange(int videoId) async {
+    final d = await db;
+    final rows = await d.query('repeat_ranges',
+        where: 'video_id = ? AND is_default = 1', whereArgs: [videoId], limit: 1);
+    return rows.isNotEmpty ? RepeatRange.fromMap(rows.first) : null;
+  }
+
+  Future<int> createRange(RepeatRange range) async {
+    final d = await db;
+    late int id;
+    await d.transaction((txn) async {
+      if (range.isDefault) {
+        await txn.update('repeat_ranges', {'is_default': 0},
+            where: 'video_id = ?', whereArgs: [range.videoId]);
+      }
+      final map = range.toMap()..remove('id');
+      id = await txn.insert('repeat_ranges', map);
+    });
+    DBChangeNotifier.instance.bump();
+    return id;
+  }
+
+  /// Делает диапазон [rangeId] единственным дефолтным для видео [videoId].
+  /// Если [rangeId] == null — снимает флаг "по умолчанию" со всех диапазонов видео.
+  Future<void> setDefaultRange(int videoId, int? rangeId) async {
+    final d = await db;
+    await d.transaction((txn) async {
+      await txn.update('repeat_ranges', {'is_default': 0},
+          where: 'video_id = ?', whereArgs: [videoId]);
+      if (rangeId != null) {
+        await txn.update('repeat_ranges', {'is_default': 1},
+            where: 'id = ?', whereArgs: [rangeId]);
+      }
+    });
+    DBChangeNotifier.instance.bump();
+  }
+
+  Future<void> deleteRange(int id) async {
+    final d = await db;
+    await d.delete('repeat_ranges', where: 'id = ?', whereArgs: [id]);
+    DBChangeNotifier.instance.bump();
   }
 }
