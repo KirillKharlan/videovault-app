@@ -60,15 +60,28 @@ class PipService {
     }
   }
 
-  /// Обновляет состояние (играет/пауза, есть ли следующее видео, название) —
-  /// влияет на панель действий системного PiP.
-  Future<void> updateState({required bool isPlaying, required bool hasNext, String? title}) async {
+  /// Обновляет состояние (играет/пауза, есть ли следующее видео, название,
+  /// соотношение сторон текущего видео) — влияет на панель действий
+  /// системного PiP, а также на форму самого PiP-окна, если оно уже открыто
+  /// (важно при автопереходе между видео с разным соотношением сторон).
+  Future<void> updateState({
+    required bool isPlaying,
+    required bool hasNext,
+    String? title,
+    double? aspectRatio,
+  }) async {
     try {
-      await _channel.invokeMethod('updatePipState', {
+      final args = <String, dynamic>{
         'isPlaying': isPlaying,
         'hasNext': hasNext,
         if (title != null) 'title': title,
-      });
+      };
+      if (aspectRatio != null) {
+        final (num, den) = _ratioToFraction(aspectRatio);
+        args['aspectNumerator'] = num;
+        args['aspectDenominator'] = den;
+      }
+      await _channel.invokeMethod('updatePipState', args);
     } catch (_) {
       // Не критично — просто иконки в панели действий не обновятся идеально.
     }

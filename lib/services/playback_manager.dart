@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/database.dart';
 import 'pip_service.dart';
 
@@ -185,7 +186,9 @@ class PlaybackManager extends ChangeNotifier {
 
   void _syncPipState() {
     final title = currentVideo?.title ?? 'VideoVault';
-    PipService.instance.updateState(isPlaying: isPlaying, hasNext: hasNext, title: title);
+    final aspect = controller?.value.aspectRatio;
+    PipService.instance.updateState(
+      isPlaying: isPlaying, hasNext: hasNext, title: title, aspectRatio: aspect);
     if (isBackgroundAudio) {
       PipService.instance.updateBackgroundNotification(title: title, isPlaying: isPlaying);
     }
@@ -242,6 +245,10 @@ class PlaybackManager extends ChangeNotifier {
     isBackgroundAudio = true;
     isMinimized = false; // мини-окно не нужно — работаем полностью в фоне
     notifyListeners();
+    // Foreground-сервис не даёт системе убить процесс, но НЕ мешает Android
+    // усыпить CPU после блокировки экрана — а именно это на самом деле
+    // останавливало звук за пределами приложения. WakeLock решает именно это.
+    await WakelockPlus.enable();
     await PipService.instance.startBackgroundPlayback(
       title: currentVideo!.title,
       isPlaying: isPlaying,
@@ -252,11 +259,13 @@ class PlaybackManager extends ChangeNotifier {
     if (!isBackgroundAudio) return;
     isBackgroundAudio = false;
     notifyListeners();
+    await WakelockPlus.disable();
     await PipService.instance.stopBackgroundPlayback();
   }
 
   Future<void> close() async {
     if (isBackgroundAudio) {
+      await WakelockPlus.disable();
       await PipService.instance.stopBackgroundPlayback();
     }
     await _disposeCurrent();

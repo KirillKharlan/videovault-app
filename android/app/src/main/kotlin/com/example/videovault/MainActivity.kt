@@ -105,10 +105,23 @@ class MainActivity : FlutterActivity() {
                     currentIsPlaying = call.argument<Boolean>("isPlaying") ?: currentIsPlaying
                     currentHasNext = call.argument<Boolean>("hasNext") ?: currentHasNext
                     call.argument<String>("title")?.let { currentTitle = it }
+                    val aspectNum = call.argument<Int>("aspectNumerator")
+                    val aspectDen = call.argument<Int>("aspectDenominator")
+                    if (aspectNum != null && aspectDen != null) {
+                        pipAspectNumerator = aspectNum.coerceAtLeast(1)
+                        pipAspectDenominator = aspectDen.coerceAtLeast(1)
+                    }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
                         try {
                             setPictureInPictureParams(
-                                PictureInPictureParams.Builder().setActions(buildPipActions()).build()
+                                PictureInPictureParams.Builder()
+                                    .setActions(buildPipActions())
+                                    // Форма уже открытого PiP-окна должна следовать за
+                                    // соотношением сторон ТЕКУЩЕГО видео — иначе при
+                                    // автопереходе с вертикального видео на горизонтальное
+                                    // (и наоборот) окно остаётся в старой форме.
+                                    .setAspectRatio(Rational(pipAspectNumerator, pipAspectDenominator))
+                                    .build()
                             )
                         } catch (e: Exception) { /* игнорируем */ }
                     }
@@ -162,14 +175,6 @@ class MainActivity : FlutterActivity() {
             Icon.createWithResource(this, playPauseIcon), playPauseTitle, playPauseTitle,
             PendingIntent.getBroadcast(
                 this, 1, Intent(ACTION_PLAY_PAUSE_BROADCAST).setPackage(packageName),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-        ))
-
-        actions.add(RemoteAction(
-            Icon.createWithResource(this, R.drawable.ic_pip_forward10), "+10s", "Forward 10 seconds",
-            PendingIntent.getBroadcast(
-                this, 2, Intent(ACTION_FORWARD_10_BROADCAST).setPackage(packageName),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         ))
