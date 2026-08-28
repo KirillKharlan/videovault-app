@@ -8,13 +8,17 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 
-/// Минимальный foreground-сервис. Он НЕ проигрывает звук сам — реальное
-/// воспроизведение по-прежнему делает video_player (ExoPlayer) внутри Flutter.
-/// Единственная задача сервиса — держать процесс приложения живым и не дать
-/// системе "заморозить" его после сворачивания (без активного foreground
-/// service Android останавливает декодирование в фоне через несколько секунд).
+/// Foreground-сервис + PowerManager wake lock. Сам он звук НЕ проигрывает —
+/// реальное воспроизведение по-прежнему делает video_player (ExoPlayer)
+/// внутри Flutter. Но у него ДВЕ задачи, а не одна:
+///  1. Foreground-сервис не даёт системе убить сам ПРОЦЕСС приложения.
+///  2. PARTIAL_WAKE_LOCK не даёт системе усыпить CPU после выключения
+///     экрана — без него декодирование звука останавливается через
+///     несколько секунд после блокировки телефона, ДАЖЕ если foreground-
+///     сервис жив (foreground-сервис защищает процесс, а не CPU).
 class BackgroundPlaybackService : Service() {
 
     companion object {
@@ -29,6 +33,8 @@ class BackgroundPlaybackService : Service() {
         const val EXTRA_IS_PLAYING = "isPlaying"
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
@@ -37,6 +43,7 @@ class BackgroundPlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -44,9 +51,34 @@ class BackgroundPlaybackService : Service() {
                 val title = intent?.getStringExtra(EXTRA_TITLE) ?: "VideoVault"
                 val isPlaying = intent?.getBooleanExtra(EXTRA_IS_PLAYING, true) ?: true
                 startForeground(NOTIF_ID, buildNotification(title, isPlaying))
+                acquireWakeLock()
             }
         }
         return START_STICKY
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        val wl = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK, "VideoVault:BackgroundPlaybackWakeLock"
+        )
+        wl.setReferenceCounted(false)
+        // Предохранитель на 12 часов — если по какой-то причине release() не
+        // вызовется (например, процесс убит системой напрямую), лок не
+        // держится вечно и не сажает батарею навсегда.
+        wl.acquire(12 * 60 * 60 * 1000L)
+        wakeLock = wl
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+    }
+
+    override fun onDestroy() {
+        releaseWakeLock()
+        super.onDestroy()
     }
 
     private fun buildNotification(title: String, isPlaying: Boolean): Notification {

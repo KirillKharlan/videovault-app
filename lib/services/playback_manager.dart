@@ -47,6 +47,8 @@ class PlaybackManager extends ChangeNotifier {
   Duration? adhocEnd;
   bool _endHandled = false;
 
+  bool _wakelockOn = false;
+
   bool get hasNext => playlist != null && currentIndex < playlist!.length - 1;
   bool get isPlaying => controller?.value.isPlaying ?? false;
 
@@ -141,6 +143,7 @@ class PlaybackManager extends ChangeNotifier {
       if (hasNext) playNext();
     }
 
+    _syncWakelock();
     _syncPipState();
   }
 
@@ -173,7 +176,25 @@ class PlaybackManager extends ChangeNotifier {
       controller!.play();
     }
     notifyListeners();
+    _syncWakelock();
     _syncPipState();
+  }
+
+  /// Держит экран включённым, пока видео реально играет (не только в
+  /// режиме "фоновый звук") — иначе при просмотре без касаний экрана
+  /// срабатывает обычная блокировка телефона и видео/звук останавливаются.
+  /// Не связан с CPU-wakelock фонового сервиса — это отдельная защита
+  /// (см. BackgroundPlaybackService), нужная именно для игры с потухшим
+  /// экраном, где держать экран включённым как раз не нужно.
+  void _syncWakelock() {
+    final shouldBeOn = isPlaying;
+    if (shouldBeOn == _wakelockOn) return;
+    _wakelockOn = shouldBeOn;
+    if (shouldBeOn) {
+      WakelockPlus.enable();
+    } else {
+      WakelockPlus.disable();
+    }
   }
 
   void skipForward(Duration amount) {
@@ -236,19 +257,19 @@ class PlaybackManager extends ChangeNotifier {
 
   // ── Полностью фоновое воспроизведение (со звуком, без окна) ────────────
   //
-  // Запускает foreground-сервис с уведомлением — только он не даёт Android
-  // "заморозить" процесс приложения после сворачивания. Работает даже если
-  // пользователь полностью свернул приложение или открыл другое.
+  // Запускает foreground-сервис с уведомлением. У сервиса теперь ДВЕ задачи
+  // (см. BackgroundPlaybackService.kt): не дать системе убить процесс, И
+  // не дать системе усыпить CPU после выключения экрана через свой
+  // собственный PARTIAL_WAKE_LOCK — именно это раньше не давало звуку
+  // играть за пределами приложения. Экранный WakelockPlus (_syncWakelock)
+  // тут ни при чём: он держит ЭКРАН включённым, а в фоне экран как раз
+  // должен иметь возможность потухнуть.
 
   Future<void> enableBackgroundAudio() async {
     if (controller == null || currentVideo == null) return;
     isBackgroundAudio = true;
     isMinimized = false; // мини-окно не нужно — работаем полностью в фоне
     notifyListeners();
-    // Foreground-сервис не даёт системе убить процесс, но НЕ мешает Android
-    // усыпить CPU после блокировки экрана — а именно это на самом деле
-    // останавливало звук за пределами приложения. WakeLock решает именно это.
-    await WakelockPlus.enable();
     await PipService.instance.startBackgroundPlayback(
       title: currentVideo!.title,
       isPlaying: isPlaying,
@@ -259,13 +280,11 @@ class PlaybackManager extends ChangeNotifier {
     if (!isBackgroundAudio) return;
     isBackgroundAudio = false;
     notifyListeners();
-    await WakelockPlus.disable();
     await PipService.instance.stopBackgroundPlayback();
   }
 
   Future<void> close() async {
     if (isBackgroundAudio) {
-      await WakelockPlus.disable();
       await PipService.instance.stopBackgroundPlayback();
     }
     await _disposeCurrent();
@@ -287,5 +306,9 @@ class PlaybackManager extends ChangeNotifier {
     adhocLoop = false;
     adhocStart = null;
     adhocEnd = null;
+    if (_wakelockOn) {
+      _wakelockOn = false;
+      await WakelockPlus.disable();
+    }
   }
 }
