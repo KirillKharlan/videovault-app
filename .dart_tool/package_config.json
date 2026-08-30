@@ -122,10 +122,28 @@
       "languageVersion": "3.7"
     },
     {
+      "name": "ffmpeg_kit_flutter_new_audio",
+      "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/ffmpeg_kit_flutter_new_audio-2.5.2",
+      "packageUri": "lib/",
+      "languageVersion": "3.1"
+    },
+    {
+      "name": "ffmpeg_kit_flutter_platform_interface",
+      "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/ffmpeg_kit_flutter_platform_interface-0.2.1",
+      "packageUri": "lib/",
+      "languageVersion": "2.12"
+    },
+    {
       "name": "file",
       "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/file-7.0.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
+    },
+    {
+      "name": "file_saver",
+      "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/file_saver-0.2.13",
+      "packageUri": "lib/",
+      "languageVersion": "2.17"
     },
     {
       "name": "file_selector_linux",
@@ -216,6 +234,12 @@
       "rootUri": "file:///C:/flutr/flutter/packages/flutter_web_plugins",
       "packageUri": "lib/",
       "languageVersion": "3.10"
+    },
+    {
+      "name": "gal",
+      "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/gal-2.3.3",
+      "packageUri": "lib/",
+      "languageVersion": "3.0"
     },
     {
       "name": "hooks",
@@ -708,12 +732,6 @@
       "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/video_player_avfoundation-2.11.0",
       "packageUri": "lib/",
       "languageVersion": "3.10"
-    },
-    {
-      "name": "video_player_pip",
-      "rootUri": "file:///C:/Users/user/AppData/Local/Pub/Cache/hosted/pub.dev/video_player_pip-0.0.10",
-      "packageUri": "lib/",
-      "languageVersion": "3.7"
     },
     {
       "name": "video_player_platform_interface",

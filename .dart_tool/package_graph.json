@@ -10,9 +10,12 @@
         "cached_network_image",
         "chewie",
         "dio",
+        "ffmpeg_kit_flutter_new_audio",
+        "file_saver",
         "flutter",
         "flutter_local_notifications",
         "flutter_video_thumbnail_plus",
+        "gal",
         "http",
         "image_picker",
         "intl",
@@ -25,7 +28,7 @@
         "sqflite",
         "timeago",
         "video_player",
-        "video_player_pip"
+        "wakelock_plus"
       ],
       "devDependencies": [
         "flutter_lints",
@@ -182,18 +185,6 @@
       ]
     },
     {
-      "name": "video_player_pip",
-      "version": "0.0.10",
-      "dependencies": [
-        "flutter",
-        "html",
-        "plugin_platform_interface",
-        "video_player_android",
-        "video_player_avfoundation",
-        "video_player_platform_interface"
-      ]
-    },
-    {
       "name": "chewie",
       "version": "1.13.1",
       "dependencies": [
@@ -245,6 +236,20 @@
         "meta",
         "mime",
         "path"
+      ]
+    },
+    {
+      "name": "wakelock_plus",
+      "version": "1.5.2",
+      "dependencies": [
+        "dbus",
+        "flutter",
+        "flutter_web_plugins",
+        "meta",
+        "package_info_plus",
+        "wakelock_plus_platform_interface",
+        "web",
+        "win32"
       ]
     },
     {
@@ -706,6 +711,30 @@
       ]
     },
     {
+      "name": "provider",
+      "version": "6.1.5+1",
+      "dependencies": [
+        "collection",
+        "flutter",
+        "nested"
+      ]
+    },
+    {
+      "name": "cupertino_icons",
+      "version": "1.0.9",
+      "dependencies": []
+    },
+    {
+      "name": "video_player_web",
+      "version": "2.4.0",
+      "dependencies": [
+        "flutter",
+        "flutter_web_plugins",
+        "video_player_platform_interface",
+        "web"
+      ]
+    },
+    {
       "name": "video_player_platform_interface",
       "version": "6.9.0",
       "dependencies": [
@@ -737,44 +766,6 @@
       "dependencies": [
         "csslib",
         "source_span"
-      ]
-    },
-    {
-      "name": "wakelock_plus",
-      "version": "1.5.2",
-      "dependencies": [
-        "dbus",
-        "flutter",
-        "flutter_web_plugins",
-        "meta",
-        "package_info_plus",
-        "wakelock_plus_platform_interface",
-        "web",
-        "win32"
-      ]
-    },
-    {
-      "name": "provider",
-      "version": "6.1.5+1",
-      "dependencies": [
-        "collection",
-        "flutter",
-        "nested"
-      ]
-    },
-    {
-      "name": "cupertino_icons",
-      "version": "1.0.9",
-      "dependencies": []
-    },
-    {
-      "name": "video_player_web",
-      "version": "2.4.0",
-      "dependencies": [
-        "flutter",
-        "flutter_web_plugins",
-        "video_player_platform_interface",
-        "web"
       ]
     },
     {
@@ -844,6 +835,41 @@
       "dependencies": [
         "collection",
         "meta"
+      ]
+    },
+    {
+      "name": "package_info_plus",
+      "version": "9.0.1",
+      "dependencies": [
+        "clock",
+        "ffi",
+        "flutter",
+        "flutter_web_plugins",
+        "http",
+        "meta",
+        "package_info_plus_platform_interface",
+        "path",
+        "web",
+        "win32"
+      ]
+    },
+    {
+      "name": "dbus",
+      "version": "0.7.14",
+      "dependencies": [
+        "args",
+        "ffi",
+        "meta",
+        "xml"
+      ]
+    },
+    {
+      "name": "wakelock_plus_platform_interface",
+      "version": "1.5.1",
+      "dependencies": [
+        "flutter",
+        "meta",
+        "plugin_platform_interface"
       ]
     },
     {
@@ -965,16 +991,6 @@
       ]
     },
     {
-      "name": "dbus",
-      "version": "0.7.14",
-      "dependencies": [
-        "args",
-        "ffi",
-        "meta",
-        "xml"
-      ]
-    },
-    {
       "name": "uuid",
       "version": "4.5.3",
       "dependencies": [
@@ -1027,42 +1043,17 @@
       ]
     },
     {
-      "name": "csslib",
-      "version": "1.0.2",
-      "dependencies": [
-        "source_span"
-      ]
-    },
-    {
-      "name": "package_info_plus",
-      "version": "9.0.1",
-      "dependencies": [
-        "clock",
-        "ffi",
-        "flutter",
-        "flutter_web_plugins",
-        "http",
-        "meta",
-        "package_info_plus_platform_interface",
-        "path",
-        "web",
-        "win32"
-      ]
-    },
-    {
-      "name": "wakelock_plus_platform_interface",
-      "version": "1.5.1",
-      "dependencies": [
-        "flutter",
-        "meta",
-        "plugin_platform_interface"
-      ]
-    },
-    {
       "name": "nested",
       "version": "1.0.0",
       "dependencies": [
         "flutter"
+      ]
+    },
+    {
+      "name": "csslib",
+      "version": "1.0.2",
+      "dependencies": [
+        "source_span"
       ]
     },
     {
@@ -1078,9 +1069,13 @@
       ]
     },
     {
-      "name": "vm_service",
-      "version": "15.2.0",
-      "dependencies": []
+      "name": "package_info_plus_platform_interface",
+      "version": "3.2.1",
+      "dependencies": [
+        "flutter",
+        "meta",
+        "plugin_platform_interface"
+      ]
     },
     {
       "name": "xml",
@@ -1094,6 +1089,11 @@
     {
       "name": "args",
       "version": "2.7.0",
+      "dependencies": []
+    },
+    {
+      "name": "vm_service",
+      "version": "15.2.0",
       "dependencies": []
     },
     {
@@ -1149,15 +1149,6 @@
       ]
     },
     {
-      "name": "package_info_plus_platform_interface",
-      "version": "3.2.1",
-      "dependencies": [
-        "flutter",
-        "meta",
-        "plugin_platform_interface"
-      ]
-    },
-    {
       "name": "petitparser",
       "version": "7.0.2",
       "dependencies": [
@@ -1181,6 +1172,42 @@
         "collection",
         "meta",
         "pub_semver"
+      ]
+    },
+    {
+      "name": "file_saver",
+      "version": "0.2.13",
+      "dependencies": [
+        "dio",
+        "flutter",
+        "flutter_web_plugins",
+        "path_provider",
+        "path_provider_linux",
+        "path_provider_windows",
+        "web"
+      ]
+    },
+    {
+      "name": "gal",
+      "version": "2.3.3",
+      "dependencies": [
+        "flutter"
+      ]
+    },
+    {
+      "name": "ffmpeg_kit_flutter_new_audio",
+      "version": "2.5.2",
+      "dependencies": [
+        "ffmpeg_kit_flutter_platform_interface",
+        "flutter"
+      ]
+    },
+    {
+      "name": "ffmpeg_kit_flutter_platform_interface",
+      "version": "0.2.1",
+      "dependencies": [
+        "flutter",
+        "plugin_platform_interface"
       ]
     }
   ],
