@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:chewie/chewie.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
 import '../services/pip_service.dart';
+import '../services/media_export_service.dart';
 import '../services/playback_manager.dart';
 import '../widgets/safe_bottom_sheet.dart';
 
@@ -69,6 +71,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _checkPipSupport() async {
     final supported = await PipService.instance.isPipSupported();
     if (mounted) setState(() => _pipSupported = supported);
+    _syncAutoEnterPip();
+  }
+
+  bool? _lastAutoEnterState;
+  double? _lastAutoEnterAspect;
+
+  /// Включает авто-вход в PiP при сворачивании приложения (нажатие Home/
+  /// системная кнопка "назад" на главный экран), пока играет обычное видео.
+  /// В режиме фонового звука PiP-окно не нужно — звук и так продолжится
+  /// через foreground-сервис, поэтому там авто-вход выключаем.
+  void _syncAutoEnterPip() {
+    if (!_pipSupported) return;
+    final shouldAutoEnter = !_mgr.isBackgroundAudio;
+    final aspect = _mgr.controller?.value.aspectRatio ?? (16 / 9);
+    // _onManagerChanged дёргается на каждый тик плеера — не дёргаем канал
+    // на нативную сторону, если состояние и так не поменялось.
+    if (shouldAutoEnter == _lastAutoEnterState && aspect == _lastAutoEnterAspect) return;
+    _lastAutoEnterState = shouldAutoEnter;
+    _lastAutoEnterAspect = aspect;
+    PipService.instance.setAutoEnter(shouldAutoEnter, aspectRatio: aspect);
   }
 
   void _onManagerChanged() {
@@ -76,6 +98,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {});
     // Видео сменилось (автопереход) — перечитываем список диапазонов для НОВОГО видео.
     _loadRanges();
+    // Соотношение сторон могло смениться (портрет/пейзаж), либо включился/
+    // выключился фоновый звук — держим авто-вход в PiP синхронизированным.
+    _syncAutoEnterPip();
   }
 
   void _onPipModeChanged(bool isInPip) {
@@ -300,6 +325,102 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  void _showExportOptions() {
+    showSafeModalBottomSheet(
+      context: context,
+      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
+        const Padding(padding: EdgeInsets.all(16),
+            child: Text('Экспортировать', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+        ListTile(
+          leading: const Icon(Icons.photo_library_outlined),
+          title: const Text('Видео (MP4) в галерею'),
+          onTap: () { Navigator.pop(context); _exportVideo(toGallery: true); },
+        ),
+        ListTile(
+          leading: const Icon(Icons.folder_outlined),
+          title: const Text('Видео (MP4) на устройство'),
+          subtitle: const Text('Откроется системный диалог "Сохранить как"',
+              style: TextStyle(fontSize: 11)),
+          onTap: () { Navigator.pop(context); _exportVideo(toGallery: false); },
+        ),
+        ListTile(
+          leading: const Icon(Icons.music_note_outlined),
+          title: const Text('Конвертировать в MP3'),
+          subtitle: const Text('Извлечёт звук и сохранит на устройство',
+              style: TextStyle(fontSize: 11)),
+          onTap: () { Navigator.pop(context); _exportAudio(); },
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _exportVideo({required bool toGallery}) async {
+    final video = _mgr.currentVideo;
+    if (video == null) return;
+    _showExportProgress('Сохраняем видео…');
+    try {
+      if (toGallery) {
+        await MediaExportService.instance.saveVideoToGallery(video.filePath);
+      } else {
+        final name = video.filePath.split(Platform.pathSeparator).last;
+        await MediaExportService.instance.saveToDevice(video.filePath, fileName: name);
+      }
+      _closeExportProgress();
+      _showSnack(toGallery ? 'Видео сохранено в галерею' : 'Видео сохранено на устройство');
+    } catch (e) {
+      _closeExportProgress();
+      _showSnack('Не удалось экспортировать: $e', isError: true);
+    }
+  }
+
+  Future<void> _exportAudio() async {
+    final video = _mgr.currentVideo;
+    if (video == null) return;
+    _showExportProgress('Конвертируем в MP3…');
+    try {
+      final mp3Path = await MediaExportService.instance.convertToMp3(video.filePath);
+      final name = mp3Path.split(Platform.pathSeparator).last;
+      await MediaExportService.instance.saveToDevice(mp3Path, fileName: name);
+      _closeExportProgress();
+      _showSnack('MP3 сохранён на устройство');
+    } catch (e) {
+      _closeExportProgress();
+      _showSnack('Не удалось сконвертировать: $e', isError: true);
+    }
+  }
+
+  bool _exportDialogOpen = false;
+
+  void _showExportProgress(String text) {
+    _exportDialogOpen = true;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        content: Row(children: [
+          const CircularProgressIndicator(),
+          const SizedBox(width: 16),
+          Expanded(child: Text(text)),
+        ]),
+      ),
+    );
+  }
+
+  void _closeExportProgress() {
+    if (_exportDialogOpen && mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+      _exportDialogOpen = false;
+    }
+  }
+
+  void _showSnack(String text, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(text),
+      backgroundColor: isError ? Colors.redAccent : null,
+    ));
+  }
+
   void _showOptions() {
     showSafeModalBottomSheet(
       context: context,
@@ -324,6 +445,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
           leading: const Icon(Icons.folder_outlined),
           title: const Text('Move to album'),
           onTap: () { Navigator.pop(context); _moveToAlbum(); },
+        ),
+        ListTile(
+          leading: const Icon(Icons.download_outlined),
+          title: const Text('Экспортировать'),
+          subtitle: const Text('В галерею, на устройство, или в MP3',
+              style: TextStyle(fontSize: 11)),
+          onTap: () { Navigator.pop(context); _showExportOptions(); },
         ),
         ListTile(
           leading: const Icon(Icons.info_outline),

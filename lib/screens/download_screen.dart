@@ -23,7 +23,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
   VideoInfo? _info;
   String? _selectedQuality;
-  bool    _downloadAsAudio = false;
   int?    _selectedAlbumId;
   String? _selectedAlbumName;
   List<Album> _albums = [];
@@ -82,7 +81,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     try {
       await _downloader.download(
         url: url,
-        quality: _downloadAsAudio ? 'mp3' : (_selectedQuality ?? 'best'),
+        quality: _selectedQuality ?? 'best',
         albumId: _selectedAlbumId,
         customTitle: _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null,
         info: _info,
@@ -95,7 +94,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
         _urlCtrl.clear();
         _titleCtrl.clear();
         _selectedQuality = null;
-        _downloadAsAudio = false;
         // Альбом НЕ сбрасываем — остаётся выбранным для следующего скачивания.
         // Пользователь может поменять его вручную через _pickAlbum().
         ScaffoldMessenger.of(context).showSnackBar(
@@ -200,20 +198,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
               const Text('Настройки', style: TextStyle(color: Colors.white54, fontSize: 12)),
               const SizedBox(height: 12),
 
-              _optionRow(Icons.swap_horiz, 'Формат',
-                  _downloadAsAudio ? 'Аудио (MP3)' : 'Видео (MP4)',
-                  _info == null ? null : _pickFormat),
-
-              if (!_downloadAsAudio) ...[
-                const Divider(color: Color(0xFF2A2A38), height: 24),
-                _optionRow(Icons.hd, 'Качество',
-                    _selectedQuality != null
-                        ? (_selectedQuality!.isNotEmpty && RegExp(r'^\d+$').hasMatch(_selectedQuality!)
-                            ? '${_selectedQuality}p'
-                            : _selectedQuality!)
-                        : 'Выберите после загрузки инфо',
-                    _info == null ? null : _pickQuality),
-              ],
+              _optionRow(Icons.hd, 'Качество',
+                  _selectedQuality != null
+                      ? (_selectedQuality!.isNotEmpty && RegExp(r'^\d+$').hasMatch(_selectedQuality!)
+                          ? '${_selectedQuality}p'
+                          : _selectedQuality!)
+                      : 'Выберите после загрузки инфо',
+                  _info == null ? null : _pickQuality),
 
               const Divider(color: Color(0xFF2A2A38), height: 24),
 
@@ -294,30 +285,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
             borderRadius: BorderRadius.circular(6), border: Border.all(color: color.withOpacity(0.4))),
         child: Text(text, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
       );
-
-  void _pickFormat() {
-    showSafeModalBottomSheet(context: context,
-      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
-        const Padding(padding: EdgeInsets.all(16),
-            child: Text('Формат', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
-        ListTile(
-          leading: const Icon(Icons.videocam_outlined),
-          title: const Text('Видео (MP4)'),
-          trailing: !_downloadAsAudio
-              ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary) : null,
-          onTap: () { setState(() => _downloadAsAudio = false); Navigator.pop(context); },
-        ),
-        ListTile(
-          leading: const Icon(Icons.music_note_outlined),
-          title: const Text('Аудио (MP3)'),
-          subtitle: const Text('Без видеодорожки — только звук', style: TextStyle(fontSize: 11)),
-          trailing: _downloadAsAudio
-              ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary) : null,
-          onTap: () { setState(() => _downloadAsAudio = true); Navigator.pop(context); },
-        ),
-      ]),
-    );
-  }
 
   void _pickQuality() {
     final qualities = _info?.qualities ?? [];

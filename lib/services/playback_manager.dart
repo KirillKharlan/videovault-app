@@ -140,7 +140,14 @@ class PlaybackManager extends ChangeNotifier {
         pos >= dur - const Duration(milliseconds: 300) &&
         !ctrl.value.isPlaying) {
       _endHandled = true;
-      if (hasNext) playNext();
+      if (hasNext) {
+        playNext();
+      } else if (playlist != null && playlist!.length > 1) {
+        // Последнее видео в плейлисте/альбоме закончилось. isLoopActive
+        // уже проверен выше (return сработал бы раньше) — значит на этом
+        // видео повторение не включено, и по кругу переходим на первое.
+        playFirst();
+      }
     }
 
     _syncWakelock();
@@ -161,6 +168,24 @@ class PlaybackManager extends ChangeNotifier {
       isBackgroundAudio = true;
       await PipService.instance.updateBackgroundNotification(
           title: next.title, isPlaying: true);
+    }
+    if (wasMinimized) {
+      isMinimized = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> playFirst() async {
+    if (playlist == null || playlist!.isEmpty) return;
+    final first = playlist![0];
+    // Сохраняем режимы сворачивания при автопереходе — так же, как playNext.
+    final wasBackgroundAudio = isBackgroundAudio;
+    final wasMinimized = isMinimized;
+    await loadAndPlay(first, playlist: playlist, index: 0);
+    if (wasBackgroundAudio) {
+      isBackgroundAudio = true;
+      await PipService.instance.updateBackgroundNotification(
+          title: first.title, isPlaying: true);
     }
     if (wasMinimized) {
       isMinimized = true;
