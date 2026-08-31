@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/database.dart';
 import '../services/gallery_import_service.dart';
 import '../widgets/video_card.dart';
+import '../widgets/video_actions_sheet.dart';
 import 'player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -149,6 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 )));
             _load();
           },
+          onLongPress: () => showVideoActionsSheet(ctx, _videos[i], onChanged: _load),
         ),
       ),
     );

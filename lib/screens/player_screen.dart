@@ -6,6 +6,7 @@ import '../models/database.dart';
 import '../services/download_service.dart';
 import '../services/pip_service.dart';
 import '../services/media_export_service.dart';
+import '../widgets/video_actions_sheet.dart';
 import '../services/playback_manager.dart';
 import '../widgets/safe_bottom_sheet.dart';
 
@@ -445,6 +446,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
           leading: const Icon(Icons.folder_outlined),
           title: const Text('Move to album'),
           onTap: () { Navigator.pop(context); _moveToAlbum(); },
+        ),
+        ListTile(
+          leading: const Icon(Icons.edit_outlined),
+          title: const Text('Переименовать / обложка'),
+          onTap: () {
+            Navigator.pop(context);
+            final video = _mgr.currentVideo;
+            if (video != null) {
+              showVideoActionsSheet(context, video, onChanged: () => setState(() {}));
+            }
+          },
         ),
         ListTile(
           leading: const Icon(Icons.download_outlined),

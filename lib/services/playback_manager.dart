@@ -128,6 +128,12 @@ class PlaybackManager extends ChangeNotifier {
       if (pos >= end - const Duration(milliseconds: 150)) {
         if (endBehavior == 'next' && hasNext) {
           playNext();
+        } else if (endBehavior == 'next' && !hasNext &&
+            playlist != null && playlist!.length > 1) {
+          // "Затем следующее" на ПОСЛЕДНЕМ видео плейлиста/альбома — следующего
+          // нет, по кругу переходим на первое (та же логика, что и для видео
+          // без диапазона повтора).
+          playFirst();
         } else {
           ctrl.seekTo(effectiveStart);
           if (!ctrl.value.isPlaying) ctrl.play();

@@ -366,6 +366,20 @@ class AppDatabase {
     return rows.isNotEmpty ? Video.fromMap(rows.first) : null;
   }
 
+  Future<void> updateVideoTitle(int id, String title) async {
+    final d = await db;
+    await d.update('videos', {'title': title}, where: 'id = ?', whereArgs: [id]);
+    DBChangeNotifier.instance.bump();
+  }
+
+  /// [thumbnailPath] == null убирает кастомную обложку (вернётся плейсхолдер).
+  Future<void> updateVideoThumbnail(int id, String? thumbnailPath) async {
+    final d = await db;
+    await d.update('videos', {'thumbnail_path': thumbnailPath},
+        where: 'id = ?', whereArgs: [id]);
+    DBChangeNotifier.instance.bump();
+  }
+
   // ── Repeat ranges ─────────────────────────────────────────────────────
 
   Future<List<RepeatRange>> getRangesForVideo(int videoId) async {

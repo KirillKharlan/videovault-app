@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/database.dart';
 import '../widgets/safe_bottom_sheet.dart';
 import '../widgets/video_card.dart';
+import '../widgets/video_actions_sheet.dart';
 import 'album_video_picker_screen.dart';
 import 'player_screen.dart';
 
@@ -251,6 +252,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     )));
                 _load();
               },
+              onLongPress: () => showVideoActionsSheet(ctx, _videos[i], onChanged: _load),
             ),
           ),
       floatingActionButton: _videos.isNotEmpty
