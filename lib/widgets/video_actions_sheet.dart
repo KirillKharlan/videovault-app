@@ -48,6 +48,22 @@ Future<void> showVideoActionsSheet(
             onChanged();
           },
         ),
+      StatefulBuilder(
+        builder: (ctx, setSheetState) => SwitchListTile(
+          secondary: const Icon(Icons.crop_landscape_outlined),
+          title: const Text('Горизонтальный просмотр'),
+          subtitle: const Text(
+            'Для вертикальных видео — показывать в широкой рамке с полосами по бокам',
+            style: TextStyle(fontSize: 11),
+          ),
+          value: video.letterboxLandscape,
+          onChanged: (v) async {
+            setSheetState(() {}); // мгновенный визуальный отклик переключателя
+            await editor.setLetterbox(video, v);
+            onChanged();
+          },
+        ),
+      ),
     ]),
   );
 }

@@ -85,7 +85,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _syncAutoEnterPip() {
     if (!_pipSupported) return;
     final shouldAutoEnter = !_mgr.isBackgroundAudio;
-    final aspect = _mgr.controller?.value.aspectRatio ?? (16 / 9);
+    final aspect = _effectivePipAspect();
     // _onManagerChanged дёргается на каждый тик плеера — не дёргаем канал
     // на нативную сторону, если состояние и так не поменялось.
     if (shouldAutoEnter == _lastAutoEnterState && aspect == _lastAutoEnterAspect) return;
@@ -310,7 +310,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _enterPipManually() async {
-    final aspect = _mgr.controller?.value.aspectRatio ?? (16 / 9);
+    final aspect = _effectivePipAspect();
     await PipService.instance.enterPip(aspectRatio: aspect);
   }
 
@@ -582,6 +582,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
+  /// Оборачивает [child] (обычно Chewie) в рамку нужной формы. Если видео
+  /// вертикальное И для него включена настройка "показывать горизонтально" —
+  /// рамка становится 16:9 с чёрными полосами по бокам (сама картинка не
+  /// обрезается и не искажается — просто рендерится в своём родном формате
+  /// по центру более широкой рамки). Для горизонтальных видео эта настройка
+  /// ни на что не влияет — они и так уже в своей естественной форме.
+  Widget _videoFrame(VideoPlayerController ctrl, Widget child) {
+    final raw = ctrl.value.aspectRatio;
+    final isVertical = raw < 1;
+    final wantsLetterbox = isVertical && (_mgr.currentVideo?.letterboxLandscape ?? false);
+    if (!wantsLetterbox) {
+      return AspectRatio(aspectRatio: raw, child: child);
+    }
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: ColoredBox(
+        color: Colors.black,
+        child: Center(child: AspectRatio(aspectRatio: raw, child: child)),
+      ),
+    );
+  }
+
+  /// Соотношение сторон для PiP-окна — то же самое, что и для основного
+  /// плеера: если включён горизонтальный просмотр для вертикального видео,
+  /// само PiP-окно тоже должно быть широким (16:9), а не узким.
+  double _effectivePipAspect() {
+    final raw = _mgr.controller?.value.aspectRatio ?? (16 / 9);
+    if (raw < 1 && (_mgr.currentVideo?.letterboxLandscape ?? false)) return 16 / 9;
+    return raw;
+  }
+
   Widget _buildContent(BuildContext context) {
     // Показываем минимальный UI, если система уже перевела нас в PiP —
     // рекомендация самой документации Android (мелкие виджеты неудобны
@@ -592,12 +623,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         backgroundColor: Colors.black,
         body: ctrl == null
             ? const SizedBox.shrink()
-            : Center(
-                child: AspectRatio(
-                  aspectRatio: ctrl.value.aspectRatio,
-                  child: Chewie(controller: _mgr.chewieController!),
-                ),
-              ),
+            : Center(child: _videoFrame(ctrl, Chewie(controller: _mgr.chewieController!))),
       );
     }
 
@@ -693,9 +719,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 SizedBox(height: 16),
                 Text('Video file not found', style: TextStyle(color: Colors.white54)),
               ]))
-            : (_mgr.chewieController == null || _mgr.isLoading)
+            : (_mgr.chewieController == null || _mgr.isLoading || _mgr.controller == null)
               ? const Center(child: CircularProgressIndicator())
-              : Chewie(controller: _mgr.chewieController!),
+              : Center(child: _videoFrame(_mgr.controller!, Chewie(controller: _mgr.chewieController!))),
           ),
 
           if (hasNext && !_mgr.isLoading)

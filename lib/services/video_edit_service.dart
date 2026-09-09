@@ -15,6 +15,14 @@ class VideoEditService {
     await _db.updateVideoTitle(video.id!, trimmed);
   }
 
+  /// Переключает "горизонтальный просмотр" для вертикального видео —
+  /// показывать его в широкой (16:9) рамке с полосами по бокам вместо
+  /// родного вертикального формата.
+  Future<void> setLetterbox(Video video, bool enabled) async {
+    if (video.id == null) return;
+    await _db.updateVideoLetterbox(video.id!, enabled);
+  }
+
   /// Открывает галерею телефона, копирует выбранную картинку в папку обложек
   /// приложения и сохраняет путь как обложку видео. Возвращает true если
   /// пользователь выбрал картинку (false — отмена).

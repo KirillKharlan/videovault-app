@@ -57,6 +57,7 @@ class Video {
   final int duration;      // секунды
   final int fileSize;      // байты
   final int? albumId;
+  final bool letterboxLandscape; // вертикальное видео показывать в горизонтальной рамке с полосами
   final DateTime addedAt;
 
   Video({
@@ -69,6 +70,7 @@ class Video {
     this.duration = 0,
     this.fileSize = 0,
     this.albumId,
+    this.letterboxLandscape = false,
     DateTime? addedAt,
   }) : addedAt = addedAt ?? DateTime.now();
 
@@ -82,6 +84,7 @@ class Video {
         'duration': duration,
         'file_size': fileSize,
         'album_id': albumId,
+        'letterbox_landscape': letterboxLandscape ? 1 : 0,
         'added_at': addedAt.millisecondsSinceEpoch,
       };
 
@@ -95,13 +98,14 @@ class Video {
         duration: m['duration'] ?? 0,
         fileSize: m['file_size'] ?? 0,
         albumId: m['album_id'],
+        letterboxLandscape: (m['letterbox_landscape'] ?? 0) == 1,
         addedAt: DateTime.fromMillisecondsSinceEpoch(m['added_at']),
       );
 
   Video copyWith({
     int? id, String? title, String? filePath, String? thumbnailPath,
     String? sourceUrl, String? platform, int? duration, int? fileSize,
-    int? albumId, bool clearAlbum = false,
+    int? albumId, bool clearAlbum = false, bool? letterboxLandscape,
   }) => Video(
         id: id ?? this.id,
         title: title ?? this.title,
@@ -112,6 +116,7 @@ class Video {
         duration: duration ?? this.duration,
         fileSize: fileSize ?? this.fileSize,
         albumId: clearAlbum ? null : (albumId ?? this.albumId),
+        letterboxLandscape: letterboxLandscape ?? this.letterboxLandscape,
         addedAt: addedAt,
       );
 
@@ -225,7 +230,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'videovault.db');
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE albums (
@@ -246,6 +251,7 @@ class AppDatabase {
             duration INTEGER DEFAULT 0,
             file_size INTEGER DEFAULT 0,
             album_id INTEGER REFERENCES albums(id) ON DELETE SET NULL,
+            letterbox_landscape INTEGER DEFAULT 0,
             added_at INTEGER NOT NULL
           )
         ''');
@@ -274,6 +280,10 @@ class AppDatabase {
               end_behavior TEXT DEFAULT 'loop'
             )
           ''');
+        }
+        if (oldVersion < 3) {
+          await db.execute(
+              'ALTER TABLE videos ADD COLUMN letterbox_landscape INTEGER DEFAULT 0');
         }
       },
     );
@@ -376,6 +386,18 @@ class AppDatabase {
   Future<void> updateVideoThumbnail(int id, String? thumbnailPath) async {
     final d = await db;
     await d.update('videos', {'thumbnail_path': thumbnailPath},
+        where: 'id = ?', whereArgs: [id]);
+    DBChangeNotifier.instance.bump();
+  }
+
+  /// Настройка просмотра для ВЕРТИКАЛЬНОГО видео: показывать ли его в
+  /// горизонтальной рамке (16:9) с полосами по бокам вместо родной
+  /// вертикальной формы. Для видео, которые и так горизонтальные, эта
+  /// настройка ни на что не влияет — они уже показываются в своём
+  /// естественном формате.
+  Future<void> updateVideoLetterbox(int id, bool letterboxLandscape) async {
+    final d = await db;
+    await d.update('videos', {'letterbox_landscape': letterboxLandscape ? 1 : 0},
         where: 'id = ?', whereArgs: [id]);
     DBChangeNotifier.instance.bump();
   }

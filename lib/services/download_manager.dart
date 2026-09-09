@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import '../api/api_client.dart';
 import '../models/database.dart';
 import 'download_service.dart';
 
