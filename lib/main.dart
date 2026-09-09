@@ -4,6 +4,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'screens/home_screen.dart';
 import 'screens/albums_screen.dart';
 import 'screens/download_screen.dart';
+import 'services/download_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -137,14 +138,58 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _index,
+      body: Column(
         children: [
-          const HomeScreen(),
-          const AlbumsScreen(),
-          DownloadScreen(
-            initialUrl: _sharedUrl,
-            onUrlConsumed: () => setState(() => _sharedUrl = null),
+          Expanded(
+            child: IndexedStack(
+              index: _index,
+              children: [
+                const HomeScreen(),
+                const AlbumsScreen(),
+                DownloadScreen(
+                  initialUrl: _sharedUrl,
+                  onUrlConsumed: () => setState(() => _sharedUrl = null),
+                ),
+              ],
+            ),
+          ),
+          // Видна с любой вкладки, пока идёт скачивание — не нужно
+          // возвращаться на вкладку "Download", чтобы понять, жива ли
+          // загрузка ещё. Тап переносит на вкладку загрузки.
+          ListenableBuilder(
+            listenable: DownloadManager.instance,
+            builder: (context, _) {
+              final mgr = DownloadManager.instance;
+              if (!mgr.isDownloading) return const SizedBox.shrink();
+              return InkWell(
+                onTap: () => setState(() => _index = 2),
+                child: Container(
+                  color: const Color(0xFF16161E),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(children: [
+                    SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2, value: mgr.progress > 0 ? mgr.progress : null,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(mgr.title ?? 'Загрузка…',
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white, fontSize: 13)),
+                        Text(mgr.statusText,
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                      ]),
+                    ),
+                    Text('${(mgr.progress * 100).toInt()}%',
+                        style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                  ]),
+                ),
+              );
+            },
           ),
         ],
       ),

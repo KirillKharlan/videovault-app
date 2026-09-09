@@ -1,8 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
-import '../services/download_service.dart';
+import '../services/download_manager.dart';
 import '../widgets/safe_bottom_sheet.dart';
 
 class DownloadScreen extends StatefulWidget {
@@ -18,7 +19,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
   final _urlCtrl    = TextEditingController();
   final _titleCtrl  = TextEditingController();
   final _api        = ApiClient();
-  final _downloader = DownloadService();
   final _db         = AppDatabase();
 
   VideoInfo? _info;
@@ -28,19 +28,22 @@ class _DownloadScreenState extends State<DownloadScreen> {
   List<Album> _albums = [];
 
   bool   _fetchingInfo = false;
-  bool   _downloading  = false;
-  double _progress     = 0;
-  String _statusText   = '';
+  String _fetchError   = '';
 
   @override
   void initState() {
     super.initState();
     _loadAlbums();
+    DownloadManager.instance.addListener(_onManagerChanged);
     if (widget.initialUrl != null) {
       _urlCtrl.text = widget.initialUrl!;
       widget.onUrlConsumed?.call();
       WidgetsBinding.instance.addPostFrameCallback((_) => _fetchInfo());
     }
+  }
+
+  void _onManagerChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadAlbums() async {
@@ -51,7 +54,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
   Future<void> _fetchInfo() async {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty) return;
-    setState(() { _fetchingInfo = true; _info = null; _statusText = ''; });
+    setState(() { _fetchingInfo = true; _info = null; _fetchError = ''; });
     try {
       final info = await _api.fetchInfo(url);
       if (mounted) setState(() {
@@ -61,13 +64,18 @@ class _DownloadScreenState extends State<DownloadScreen> {
         _fetchingInfo = false;
       });
     } catch (e) {
-      if (mounted) setState(() { _fetchingInfo = false; _statusText = '❌ $e'; });
+      if (mounted) setState(() { _fetchingInfo = false; _fetchError = '❌ $e'; });
     }
   }
 
+  /// Запускает загрузку через глобальный DownloadManager и СРАЗУ отпускает
+  /// экран — не ждёт завершения. Можно сразу уйти с этого экрана (сменить
+  /// вкладку, открыть плеер) — прогресс продолжит отслеживаться в фоне и
+  /// будет виден на полоске прогресса в MainScreen, а по завершении здесь
+  /// же (если пользователь остался на экране) покажется снэкбар.
   Future<void> _download() async {
     final url = _urlCtrl.text.trim();
-    if (url.isEmpty || _downloading) return;
+    if (url.isEmpty || DownloadManager.instance.isDownloading) return;
 
     // Если инфо ещё не получена для этого URL — получаем автоматически,
     // чтобы не нужно было нажимать две кнопки подряд.
@@ -76,32 +84,37 @@ class _DownloadScreenState extends State<DownloadScreen> {
       if (_info == null) return; // фетч не удался — ошибка уже показана
     }
 
-    setState(() { _downloading = true; _progress = 0; _statusText = 'Запуск…'; });
+    final capturedInfo = _info!;
+    final capturedQuality = _selectedQuality ?? 'best';
+    final capturedAlbumId = _selectedAlbumId;
+    final capturedTitle = _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null;
 
-    try {
-      await _downloader.download(
-        url: url,
-        quality: _selectedQuality ?? 'best',
-        albumId: _selectedAlbumId,
-        customTitle: _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null,
-        info: _info,
-        onProgress: (p, step) {
-          if (mounted) setState(() { _progress = p; _statusText = step; });
-        },
-      );
-      if (mounted) {
-        setState(() { _downloading = false; _statusText = ''; _info = null; });
-        _urlCtrl.clear();
-        _titleCtrl.clear();
-        _selectedQuality = null;
-        // Альбом НЕ сбрасываем — остаётся выбранным для следующего скачивания.
-        // Пользователь может поменять его вручную через _pickAlbum().
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Видео сохранено!')));
-      }
-    } catch (e) {
-      if (mounted) setState(() { _downloading = false; _statusText = '❌ $e'; });
-    }
+    // Форму сразу очищаем — не нужно ждать завершения, чтобы начать
+    // готовить следующее скачивание.
+    setState(() { _info = null; _fetchError = ''; });
+    _urlCtrl.clear();
+    _titleCtrl.clear();
+    _selectedQuality = null;
+
+    unawaited(DownloadManager.instance.startDownload(
+      url: url,
+      quality: capturedQuality,
+      albumId: capturedAlbumId,
+      customTitle: capturedTitle,
+      info: capturedInfo,
+      onDone: (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('✅ Видео сохранено!')));
+        }
+      },
+      onError: (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('❌ $e')));
+        }
+      },
+    ));
   }
 
   @override
@@ -221,37 +234,40 @@ class _DownloadScreenState extends State<DownloadScreen> {
               ),
             ]),
 
-            // Прогресс
-            if (_downloading) ...[
+            // Прогресс — из глобального менеджера, виден даже если это не
+            // единственная загрузка, начатая с этого экрана недавно.
+            if (DownloadManager.instance.isDownloading) ...[
               const SizedBox(height: 20),
               LinearProgressIndicator(
-                value: _progress > 0 ? _progress : null,
+                value: DownloadManager.instance.progress > 0
+                    ? DownloadManager.instance.progress : null,
                 backgroundColor: const Color(0xFF1E1E2A),
                 valueColor: AlwaysStoppedAnimation(purple),
               ),
               const SizedBox(height: 8),
-              Text(_statusText, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+              Text(DownloadManager.instance.statusText,
+                  style: const TextStyle(color: Colors.white54, fontSize: 13)),
             ],
 
-            if (_statusText.isNotEmpty && !_downloading)
+            if (_fetchError.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
-                child: Text(_statusText,
-                    style: TextStyle(
-                        color: _statusText.startsWith('❌') ? Colors.redAccent : Colors.white54,
-                        fontSize: 13)),
+                child: Text(_fetchError,
+                    style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
               ),
 
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: (_downloading || _fetchingInfo) ? null : _download,
-              icon: (_downloading || _fetchingInfo)
+              onPressed: _fetchingInfo ? null : _download,
+              icon: _fetchingInfo
                   ? const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.download),
-              label: Text(_downloading
-                  ? 'Загружается…'
-                  : (_fetchingInfo ? 'Получение информации…' : 'Скачать')),
+              label: Text(_fetchingInfo
+                  ? 'Получение информации…'
+                  : (DownloadManager.instance.isDownloading
+                      ? 'Скачать (уже качается другое видео…)'
+                      : 'Скачать')),
             ),
           ]),
         ),
@@ -342,5 +358,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
   }
 
   @override
-  void dispose() { _urlCtrl.dispose(); _titleCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    DownloadManager.instance.removeListener(_onManagerChanged);
+    _urlCtrl.dispose();
+    _titleCtrl.dispose();
+    super.dispose();
+  }
 }
