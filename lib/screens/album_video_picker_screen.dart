@@ -82,7 +82,9 @@ class _AlbumVideoPickerScreenState extends State<AlbumVideoPickerScreen> {
           ),
         ],
       ),
-      body: Column(children: [
+      body: SafeArea(
+        top: false,
+        child: Column(children: [
         Padding(
           padding: const EdgeInsets.all(16),
           child: TextField(
@@ -122,6 +124,7 @@ class _AlbumVideoPickerScreenState extends State<AlbumVideoPickerScreen> {
                     ),
         ),
       ]),
+      ),
       floatingActionButton: _selected.isNotEmpty
           ? FloatingActionButton.extended(
               onPressed: _confirm,

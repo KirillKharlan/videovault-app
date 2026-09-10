@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 
-/// Показывает bottom sheet с гарантированным отступом снизу, чтобы контент
-/// не перекрывался системными кнопками навигации телефона (жест/кнопки).
-///
-/// Раньше нижний пункт (обычно "Delete") оказывался частично под системной
-/// панелью — эта обёртка добавляет SafeArea + дополнительный отступ.
+/// Показывает bottom sheet с гарантированным отступом снизу (чтобы контент
+/// не перекрывался системными кнопками навигации телефона), и с поддержкой
+/// прокрутки — критично в горизонтальной ориентации, где высота экрана
+/// намного меньше и длинные списки (диапазоны повтора, действия с видео и
+/// т.д.) иначе просто обрезаются без возможности пролистать до конца.
 Future<T?> showSafeModalBottomSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   Color backgroundColor = const Color(0xFF16161E),
-  bool isScrollControlled = false,
+  bool isScrollControlled = true,
 }) {
   return showModalBottomSheet<T>(
     context: context,
@@ -23,7 +23,13 @@ Future<T?> showSafeModalBottomSheet<T>({
         padding: EdgeInsets.only(
           bottom: MediaQuery.of(ctx).viewPadding.bottom > 0 ? 8 : 16,
         ),
-        child: builder(ctx),
+        // ConstrainedBox + SingleChildScrollView: шторка не будет выше, чем
+        // позволяет экран (с запасом под системные жесты/клавиатуру), а если
+        // контент не помещается — появится прокрутка вместо обрезки.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.9),
+          child: SingleChildScrollView(child: builder(ctx)),
+        ),
       ),
     ),
   );

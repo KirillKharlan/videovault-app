@@ -48,24 +48,45 @@ Future<void> showVideoActionsSheet(
             onChanged();
           },
         ),
-      StatefulBuilder(
-        builder: (ctx, setSheetState) => SwitchListTile(
-          secondary: const Icon(Icons.crop_landscape_outlined),
-          title: const Text('Горизонтальный просмотр'),
-          subtitle: const Text(
-            'Для вертикальных видео — показывать в широкой рамке с полосами по бокам',
-            style: TextStyle(fontSize: 11),
-          ),
-          value: video.letterboxLandscape,
-          onChanged: (v) async {
-            setSheetState(() {}); // мгновенный визуальный отклик переключателя
-            await editor.setLetterbox(video, v);
-            onChanged();
-          },
-        ),
-      ),
+      _LetterboxSwitch(video: video, editor: editor, onChanged: onChanged),
     ]),
   );
+}
+
+/// Отдельный виджет вместо StatefulBuilder с локальной переменной — value
+/// свитча должен быть завязан на РЕАЛЬНО мутируемое состояние, а не на
+/// захваченное поле video.letterboxLandscape (оно не меняется после
+/// построения sheet, поэтому переключатель просто отскакивал назад).
+class _LetterboxSwitch extends StatefulWidget {
+  final Video video;
+  final VideoEditService editor;
+  final VoidCallback onChanged;
+  const _LetterboxSwitch({required this.video, required this.editor, required this.onChanged});
+
+  @override
+  State<_LetterboxSwitch> createState() => _LetterboxSwitchState();
+}
+
+class _LetterboxSwitchState extends State<_LetterboxSwitch> {
+  late bool _value = widget.video.letterboxLandscape;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      secondary: const Icon(Icons.crop_landscape_outlined),
+      title: const Text('Горизонтальный просмотр'),
+      subtitle: const Text(
+        'Для вертикальных видео — показывать в широкой рамке с полосами по бокам',
+        style: TextStyle(fontSize: 11),
+      ),
+      value: _value,
+      onChanged: (v) async {
+        setState(() => _value = v);
+        await widget.editor.setLetterbox(widget.video, v);
+        widget.onChanged();
+      },
+    );
+  }
 }
 
 Future<void> _showRenameDialog(

@@ -221,40 +221,43 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           ),
         ],
       ),
-      body: _videos.isEmpty
-        ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('📁', style: TextStyle(fontSize: 56)),
-            const SizedBox(height: 12),
-            const Text('No videos in this album',
-                style: TextStyle(color: Colors.white54)),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: _addVideos,
-              icon: const Icon(Icons.add),
-              label: const Text('Add videos'),
+      body: SafeArea(
+        top: false,
+        child: _videos.isEmpty
+          ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('📁', style: TextStyle(fontSize: 56)),
+              const SizedBox(height: 12),
+              const Text('No videos in this album',
+                  style: TextStyle(color: Colors.white54)),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _addVideos,
+                icon: const Icon(Icons.add),
+                label: const Text('Add videos'),
+              ),
+            ]))
+          : GridView.builder(
+              padding: const EdgeInsets.all(8),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2, childAspectRatio: 0.75,
+                crossAxisSpacing: 8, mainAxisSpacing: 8,
+              ),
+              itemCount: _videos.length,
+              itemBuilder: (ctx, i) => VideoCard(
+                video: _videos[i],
+                onTap: () async {
+                  await Navigator.push(ctx,
+                      MaterialPageRoute(builder: (_) => PlayerScreen(
+                        video: _videos[i],
+                        playlist: _videos,
+                        initialIndex: i,
+                      )));
+                  _load();
+                },
+                onLongPress: () => showVideoActionsSheet(ctx, _videos[i], onChanged: _load),
+              ),
             ),
-          ]))
-        : GridView.builder(
-            padding: const EdgeInsets.all(8),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2, childAspectRatio: 0.75,
-              crossAxisSpacing: 8, mainAxisSpacing: 8,
-            ),
-            itemCount: _videos.length,
-            itemBuilder: (ctx, i) => VideoCard(
-              video: _videos[i],
-              onTap: () async {
-                await Navigator.push(ctx,
-                    MaterialPageRoute(builder: (_) => PlayerScreen(
-                      video: _videos[i],
-                      playlist: _videos,
-                      initialIndex: i,
-                    )));
-                _load();
-              },
-              onLongPress: () => showVideoActionsSheet(ctx, _videos[i], onChanged: _load),
-            ),
-          ),
+      ),
       floatingActionButton: _videos.isNotEmpty
           ? FloatingActionButton(onPressed: _addVideos, child: const Icon(Icons.add))
           : null,
