@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:chewie/chewie.dart';
+import 'package:video_player/video_player.dart';
 import '../models/database.dart';
 import '../services/download_service.dart';
 import '../services/pip_service.dart';
