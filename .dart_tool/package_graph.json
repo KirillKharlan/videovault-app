@@ -11,7 +11,7 @@
         "chewie",
         "dio",
         "ffmpeg_kit_flutter_new_audio",
-        "file_saver",
+        "file_picker",
         "flutter",
         "flutter_local_notifications",
         "flutter_video_thumbnail_plus",
@@ -1175,19 +1175,6 @@
       ]
     },
     {
-      "name": "file_saver",
-      "version": "0.2.13",
-      "dependencies": [
-        "dio",
-        "flutter",
-        "flutter_web_plugins",
-        "path_provider",
-        "path_provider_linux",
-        "path_provider_windows",
-        "web"
-      ]
-    },
-    {
       "name": "gal",
       "version": "2.3.3",
       "dependencies": [
@@ -1208,6 +1195,21 @@
       "dependencies": [
         "flutter",
         "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "file_picker",
+      "version": "8.0.7",
+      "dependencies": [
+        "cross_file",
+        "ffi",
+        "flutter",
+        "flutter_plugin_android_lifecycle",
+        "flutter_web_plugins",
+        "path",
+        "plugin_platform_interface",
+        "web",
+        "win32"
       ]
     }
   ],
