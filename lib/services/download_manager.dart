@@ -18,8 +18,13 @@ class DownloadManager extends ChangeNotifier {
   bool isDownloading = false;
   double progress = 0;
   String statusText = '';
-  String? title;
+  VideoInfo? info;
+  String? customTitle;
   String? error;
+
+  /// Название для отображения — кастомное (если переименовали при
+  /// скачивании) или из /api/info.
+  String? get title => customTitle ?? info?.title;
 
   /// Запускает загрузку и СРАЗУ возвращает управление вызывающему коду —
   /// сам процесс продолжается в фоне независимо от того, ушёл пользователь
@@ -39,7 +44,8 @@ class DownloadManager extends ChangeNotifier {
     isDownloading = true;
     progress = 0;
     statusText = 'Запуск…';
-    title = customTitle?.trim().isNotEmpty == true ? customTitle!.trim() : info?.title;
+    this.info = info;
+    this.customTitle = (customTitle?.trim().isNotEmpty == true) ? customTitle!.trim() : null;
     error = null;
     notifyListeners();
 

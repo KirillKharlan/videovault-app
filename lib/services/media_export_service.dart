@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
-import 'package:file_saver/file_saver.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_audio/return_code.dart';
 
@@ -44,22 +44,32 @@ class MediaExportService {
   }
 
   /// Сохраняет произвольный файл (видео или mp3) в память устройства —
-  /// открывает системный диалог "Сохранить как", пользователь сам выбирает
-  /// папку (обычно Downloads).
+  /// открывает НАСТОЯЩИЙ системный диалог "Сохранить как" (Storage Access
+  /// Framework), пользователь сам выбирает папку и видит, куда сохраняет.
   ///
-  /// Примечание: текущая реализация читает файл целиком в память перед
-  /// сохранением — для очень больших видео (несколько ГБ) это может быть
-  /// заметно по потреблению RAM. Для mp3 и большинства видео это не проблема.
-  Future<void> saveToDevice(String filePath, {required String fileName}) async {
+  /// Раньше здесь использовался пакет file_saver, который на Android
+  /// сохранял файл молча в фиксированную папку без какого-либо диалога —
+  /// именно поэтому казалось, что "экспорт не работает": на самом деле он
+  /// работал, просто результат было невозможно найти.
+  ///
+  /// Примечание: читает файл целиком в память перед сохранением — для
+  /// очень больших видео (несколько ГБ) это заметно по RAM. Для mp3 и
+  /// большинства видео не проблема.
+  ///
+  /// Возвращает true, если файл сохранён; false, если пользователь отменил
+  /// диалог выбора места.
+  Future<bool> saveToDevice(String filePath, {required String fileName}) async {
     final bytes = await File(filePath).readAsBytes();
     final dotIndex = fileName.lastIndexOf('.');
     final name = dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
     final ext = dotIndex > 0 ? fileName.substring(dotIndex + 1) : 'mp4';
-    await FileSaver.instance.saveFile(
-      name: name,
+
+    final savedPath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Сохранить как',
+      fileName: '$name.$ext',
+      type: FileType.any,
       bytes: bytes,
-      ext: ext,
-      mimeType: ext == 'mp3' ? MimeType.mp3 : MimeType.mp4Video,
     );
+    return savedPath != null;
   }
 }

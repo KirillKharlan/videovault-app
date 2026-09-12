@@ -363,12 +363,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     try {
       if (toGallery) {
         await MediaExportService.instance.saveVideoToGallery(video.filePath);
+        _closeExportProgress();
+        _showSnack('Видео сохранено в галерею');
       } else {
         final name = video.filePath.split(Platform.pathSeparator).last;
-        await MediaExportService.instance.saveToDevice(video.filePath, fileName: name);
+        final saved = await MediaExportService.instance.saveToDevice(video.filePath, fileName: name);
+        _closeExportProgress();
+        _showSnack(saved ? 'Видео сохранено на устройство' : 'Сохранение отменено');
       }
-      _closeExportProgress();
-      _showSnack(toGallery ? 'Видео сохранено в галерею' : 'Видео сохранено на устройство');
     } catch (e) {
       _closeExportProgress();
       _showSnack('Не удалось экспортировать: $e', isError: true);
@@ -382,9 +384,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     try {
       final mp3Path = await MediaExportService.instance.convertToMp3(video.filePath);
       final name = mp3Path.split(Platform.pathSeparator).last;
-      await MediaExportService.instance.saveToDevice(mp3Path, fileName: name);
+      final saved = await MediaExportService.instance.saveToDevice(mp3Path, fileName: name);
       _closeExportProgress();
-      _showSnack('MP3 сохранён на устройство');
+      _showSnack(saved ? 'MP3 сохранён на устройство' : 'Сохранение отменено');
     } catch (e) {
       _closeExportProgress();
       _showSnack('Не удалось сконвертировать: $e', isError: true);

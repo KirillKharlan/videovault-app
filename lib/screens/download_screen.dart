@@ -120,6 +120,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
   @override
   Widget build(BuildContext context) {
     final purple = Theme.of(context).colorScheme.primary;
+    final mgr = DownloadManager.instance;
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
@@ -129,150 +130,188 @@ class _DownloadScreenState extends State<DownloadScreen> {
                 style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: purple)),
             const SizedBox(height: 24),
 
-            // URL
-            _card(children: [
-              const Text('Ссылка на видео', style: TextStyle(color: Colors.white54, fontSize: 12)),
-              const SizedBox(height: 8),
-              Row(children: [
-                Expanded(child: TextField(
-                  controller: _urlCtrl,
-                  keyboardType: TextInputType.url,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    hintText: 'YouTube, TikTok, Instagram…',
-                    contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  ),
-                  onSubmitted: (_) => _fetchInfo(),
-                )),
-              ]),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _fetchingInfo ? null : _fetchInfo,
-                icon: _fetchingInfo
-                    ? const SizedBox(width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.info_outline),
-                label: Text(_fetchingInfo ? 'Загрузка…' : 'Получить информацию'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: purple, side: BorderSide(color: purple),
-                  minimumSize: const Size(double.infinity, 44),
-                ),
-              ),
-            ]),
-
-            // Инфо о видео + переименование
-            if (_info != null) ...[
-              const SizedBox(height: 16),
+            if (mgr.isDownloading)
+              _activeDownloadCard(purple, mgr)
+            else ...[
+              // URL
               _card(children: [
+                const Text('Ссылка на видео', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                const SizedBox(height: 8),
                 Row(children: [
-                  if (_info!.thumbnail != null)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: CachedNetworkImage(
-                        imageUrl: _info!.thumbnail!,
-                        width: 100, height: 60, fit: BoxFit.cover,
-                        errorWidget: (_, __, ___) =>
-                            Container(width: 100, height: 60, color: const Color(0xFF1E1E2A),
-                                child: const Icon(Icons.video_file, color: Colors.white38)),
-                      ),
+                  Expanded(child: TextField(
+                    controller: _urlCtrl,
+                    keyboardType: TextInputType.url,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      hintText: 'YouTube, TikTok, Instagram…',
+                      contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     ),
-                  const SizedBox(width: 12),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      _badge(_info!.platform.toUpperCase(), purple),
-                      const SizedBox(width: 8),
-                      Text(_info!.durationFormatted,
-                          style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    ]),
-                  ])),
+                    onSubmitted: (_) => _fetchInfo(),
+                  )),
                 ]),
                 const SizedBox(height: 12),
-                const Text('Название (можно изменить)',
-                    style: TextStyle(color: Colors.white54, fontSize: 11)),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _titleCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: InputDecoration(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.refresh, size: 18, color: Colors.white38),
-                      tooltip: 'Восстановить оригинальное название',
-                      onPressed: () => setState(() => _titleCtrl.text = _info!.title),
-                    ),
+                OutlinedButton.icon(
+                  onPressed: _fetchingInfo ? null : _fetchInfo,
+                  icon: _fetchingInfo
+                      ? const SizedBox(width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.info_outline),
+                  label: Text(_fetchingInfo ? 'Загрузка…' : 'Получить информацию'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: purple, side: BorderSide(color: purple),
+                    minimumSize: const Size(double.infinity, 44),
                   ),
                 ),
               ]),
-            ],
 
-            // Опции
-            const SizedBox(height: 16),
-            _card(children: [
-              const Text('Настройки', style: TextStyle(color: Colors.white54, fontSize: 12)),
-              const SizedBox(height: 12),
+              // Инфо о видео + переименование
+              if (_info != null) ...[
+                const SizedBox(height: 16),
+                _card(children: [
+                  Row(children: [
+                    if (_info!.thumbnail != null)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: CachedNetworkImage(
+                          imageUrl: _info!.thumbnail!,
+                          width: 100, height: 60, fit: BoxFit.cover,
+                          errorWidget: (_, __, ___) =>
+                              Container(width: 100, height: 60, color: const Color(0xFF1E1E2A),
+                                  child: const Icon(Icons.video_file, color: Colors.white38)),
+                        ),
+                      ),
+                    const SizedBox(width: 12),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        _badge(_info!.platform.toUpperCase(), purple),
+                        const SizedBox(width: 8),
+                        Text(_info!.durationFormatted,
+                            style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      ]),
+                    ])),
+                  ]),
+                  const SizedBox(height: 12),
+                  const Text('Название (можно изменить)',
+                      style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _titleCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: InputDecoration(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.refresh, size: 18, color: Colors.white38),
+                        tooltip: 'Восстановить оригинальное название',
+                        onPressed: () => setState(() => _titleCtrl.text = _info!.title),
+                      ),
+                    ),
+                  ),
+                ]),
+              ],
 
-              _optionRow(Icons.hd, 'Качество',
-                  _selectedQuality != null
-                      ? (_selectedQuality!.isNotEmpty && RegExp(r'^\d+$').hasMatch(_selectedQuality!)
-                          ? '${_selectedQuality}p'
-                          : _selectedQuality!)
-                      : 'Выберите после загрузки инфо',
-                  _info == null ? null : _pickQuality),
+              // Опции
+              const SizedBox(height: 16),
+              _card(children: [
+                const Text('Настройки', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                const SizedBox(height: 12),
 
-              const Divider(color: Color(0xFF2A2A38), height: 24),
+                _optionRow(Icons.hd, 'Качество',
+                    _selectedQuality != null
+                        ? (_selectedQuality!.isNotEmpty && RegExp(r'^\d+$').hasMatch(_selectedQuality!)
+                            ? '${_selectedQuality}p'
+                            : _selectedQuality!)
+                        : 'Выберите после загрузки инфо',
+                    _info == null ? null : _pickQuality),
 
-              _optionRow(Icons.folder_outlined, 'Альбом',
-                  _selectedAlbumName ?? 'Без альбома', _pickAlbum),
+                const Divider(color: Color(0xFF2A2A38), height: 24),
 
-              const Divider(color: Color(0xFF2A2A38), height: 24),
+                _optionRow(Icons.folder_outlined, 'Альбом',
+                    _selectedAlbumName ?? 'Без альбома', _pickAlbum),
 
-              TextButton.icon(
-                onPressed: _createAlbum,
-                icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-                label: const Text('Создать новый альбом'),
-                style: TextButton.styleFrom(foregroundColor: purple),
-              ),
-            ]),
+                const Divider(color: Color(0xFF2A2A38), height: 24),
 
-            // Прогресс — из глобального менеджера, виден даже если это не
-            // единственная загрузка, начатая с этого экрана недавно.
-            if (DownloadManager.instance.isDownloading) ...[
+                TextButton.icon(
+                  onPressed: _createAlbum,
+                  icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+                  label: const Text('Создать новый альбом'),
+                  style: TextButton.styleFrom(foregroundColor: purple),
+                ),
+              ]),
+
+              if (_fetchError.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(_fetchError,
+                      style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+                ),
+
               const SizedBox(height: 20),
-              LinearProgressIndicator(
-                value: DownloadManager.instance.progress > 0
-                    ? DownloadManager.instance.progress : null,
-                backgroundColor: const Color(0xFF1E1E2A),
-                valueColor: AlwaysStoppedAnimation(purple),
+              ElevatedButton.icon(
+                onPressed: _fetchingInfo ? null : _download,
+                icon: _fetchingInfo
+                    ? const SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.download),
+                label: Text(_fetchingInfo ? 'Получение информации…' : 'Скачать'),
               ),
-              const SizedBox(height: 8),
-              Text(DownloadManager.instance.statusText,
-                  style: const TextStyle(color: Colors.white54, fontSize: 13)),
             ],
-
-            if (_fetchError.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(_fetchError,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
-              ),
-
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: _fetchingInfo ? null : _download,
-              icon: _fetchingInfo
-                  ? const SizedBox(width: 18, height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.download),
-              label: Text(_fetchingInfo
-                  ? 'Получение информации…'
-                  : (DownloadManager.instance.isDownloading
-                      ? 'Скачать (уже качается другое видео…)'
-                      : 'Скачать')),
-            ),
           ]),
         ),
       ),
     );
+  }
+
+  /// Показывается на вкладке "Скачать", пока идёт активная загрузка — та
+  /// самая карточка с картинкой/названием, которая раньше пропадала сразу
+  /// после нажатия "Скачать" (я слишком рано очищал _info). Источник данных
+  /// теперь DownloadManager, а не локальный _info — поэтому карточка видна,
+  /// даже если пользователь уходил на другую вкладку и вернулся обратно.
+  Widget _activeDownloadCard(Color purple, DownloadManager mgr) {
+    final info = mgr.info;
+    return _card(children: [
+      Row(children: [
+        if (info?.thumbnail != null)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: CachedNetworkImage(
+              imageUrl: info!.thumbnail!,
+              width: 100, height: 60, fit: BoxFit.cover,
+              errorWidget: (_, __, ___) =>
+                  Container(width: 100, height: 60, color: const Color(0xFF1E1E2A),
+                      child: const Icon(Icons.video_file, color: Colors.white38)),
+            ),
+          )
+        else
+          Container(width: 100, height: 60, decoration: BoxDecoration(
+              color: const Color(0xFF1E1E2A), borderRadius: BorderRadius.circular(8)),
+              child: const Icon(Icons.video_file, color: Colors.white38)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(mgr.title ?? 'Видео', maxLines: 2, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+          if (info != null) ...[
+            const SizedBox(height: 4),
+            Row(children: [
+              _badge(info.platform.toUpperCase(), purple),
+              const SizedBox(width: 8),
+              Text(info.durationFormatted,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            ]),
+          ],
+        ])),
+      ]),
+      const SizedBox(height: 16),
+      LinearProgressIndicator(
+        value: mgr.progress > 0 ? mgr.progress : null,
+        backgroundColor: const Color(0xFF1E1E2A),
+        valueColor: AlwaysStoppedAnimation(purple),
+      ),
+      const SizedBox(height: 8),
+      Text(mgr.statusText, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+      const SizedBox(height: 12),
+      Text('Можно перейти на другие вкладки — загрузка продолжится в фоне',
+          style: TextStyle(color: Colors.white38, fontSize: 11, fontStyle: FontStyle.italic)),
+    ]);
   }
 
   Widget _card({required List<Widget> children}) => Container(
