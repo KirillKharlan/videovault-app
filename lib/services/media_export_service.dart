@@ -64,7 +64,7 @@ class MediaExportService {
     final name = dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
     final ext = dotIndex > 0 ? fileName.substring(dotIndex + 1) : 'mp4';
 
-    final savedPath = await FilePicker.platform.saveFile(
+    final savedPath = await FilePicker.saveFile(
       dialogTitle: 'Сохранить как',
       fileName: '$name.$ext',
       type: FileType.any,

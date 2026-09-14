@@ -161,22 +161,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
-  ffmpeg_kit_flutter_new_audio:
-    dependency: "direct main"
-    description:
-      name: ffmpeg_kit_flutter_new_audio
-      sha256: "79e51732fa9bb5e88992ffdc84cbb78babbb44a773cd1f75f11290b295959c71"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.5.2"
-  ffmpeg_kit_flutter_platform_interface:
-    dependency: transitive
-    description:
-      name: ffmpeg_kit_flutter_platform_interface
-      sha256: addf046ae44e190ad0101b2fde2ad909a3cd08a2a109f6106d2f7048b7abedee
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.1"
   file:
     dependency: transitive
     description:
@@ -185,14 +169,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "7.0.1"
-  file_picker:
-    dependency: "direct main"
-    description:
-      name: file_picker
-      sha256: "29cc1fdb20613876cc7afc529738c1c0f11a9ca159b010edad0c566ac330847e"
-      url: "https://pub.dev"
-    source: hosted
-    version: "11.0.3"
   file_selector_linux:
     dependency: transitive
     description:
@@ -304,14 +280,6 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  gal:
-    dependency: "direct main"
-    description:
-      name: gal
-      sha256: f71e79840fe023a21f2f949771375444b6efcd34b9e625d5f4f5504971380a77
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.3.3"
   hooks:
     dependency: transitive
     description:
@@ -756,18 +724,18 @@ packages:
     dependency: "direct main"
     description:
       name: share_plus
-      sha256: "223873d106614442ea6f20db5a038685cc5b32a2fba81cdecaefbbae0523f7fa"
+      sha256: ef3489a969683c4f3d0239010cc8b7a2a46543a8d139e111c06c558875083544
       url: "https://pub.dev"
     source: hosted
-    version: "12.0.2"
+    version: "9.0.0"
   share_plus_platform_interface:
     dependency: transitive
     description:
       name: share_plus_platform_interface
-      sha256: "88023e53a13429bd65d8e85e11a9b484f49d4c190abbd96c7932b74d6927cc9a"
+      sha256: "0f9e4418835d1b2c3ae78fdb918251959106cefdbc4dd43526e182f80e82f6d4"
       url: "https://pub.dev"
     source: hosted
-    version: "6.1.0"
+    version: "4.0.0"
   sky_engine:
     dependency: transitive
     description: flutter
@@ -965,6 +933,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.11.0"
+  video_player_pip:
+    dependency: "direct main"
+    description:
+      name: video_player_pip
+      sha256: bb724168bdeb3a033749c68cb70e153759afde709ad41af8457b38fd6c2bcf6a
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.10"
   video_player_platform_interface:
     dependency: transitive
     description:
@@ -990,7 +966,7 @@ packages:
     source: hosted
     version: "15.2.0"
   wakelock_plus:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: wakelock_plus
       sha256: ddf3db70eaa10c37558ff817519b85d527dbd21034fd5d8e1c2e85f31588f1c1
@@ -1009,10 +985,10 @@ packages:
     dependency: transitive
     description:
       name: web
-      sha256: "868d88a33d8a87b18ffc05f9f030ba328ffefba92d6c127917a2ba740f9cfe4a"
+      sha256: "97da13628db363c635202ad97068d47c5b8aa555808e7a9411963c533b449b27"
       url: "https://pub.dev"
     source: hosted
-    version: "1.1.1"
+    version: "0.5.1"
   win32:
     dependency: transitive
     description:

@@ -16,16 +16,6 @@ public final class GeneratedPluginRegistrant {
   private static final String TAG = "GeneratedPluginRegistrant";
   public static void registerWith(@NonNull FlutterEngine flutterEngine) {
     try {
-      flutterEngine.getPlugins().add(new com.antonkarpenko.ffmpegkit.FFmpegKitFlutterPlugin());
-    } catch (Exception e) {
-      Log.e(TAG, "Error registering plugin ffmpeg_kit_flutter_new_audio, com.antonkarpenko.ffmpegkit.FFmpegKitFlutterPlugin", e);
-    }
-    try {
-      flutterEngine.getPlugins().add(new com.mr.flutter.plugin.filepicker.FilePickerPlugin());
-    } catch (Exception e) {
-      Log.e(TAG, "Error registering plugin file_picker, com.mr.flutter.plugin.filepicker.FilePickerPlugin", e);
-    }
-    try {
       flutterEngine.getPlugins().add(new com.dexterous.flutterlocalnotifications.FlutterLocalNotificationsPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin flutter_local_notifications, com.dexterous.flutterlocalnotifications.FlutterLocalNotificationsPlugin", e);
@@ -39,11 +29,6 @@ public final class GeneratedPluginRegistrant {
       flutterEngine.getPlugins().add(new com.example.flutter_video_thumbnail_plus.FlutterVideoThumbnailPlusPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin flutter_video_thumbnail_plus, com.example.flutter_video_thumbnail_plus.FlutterVideoThumbnailPlusPlugin", e);
-    }
-    try {
-      flutterEngine.getPlugins().add(new studio.midoridesign.gal.GalPlugin());
-    } catch (Exception e) {
-      Log.e(TAG, "Error registering plugin gal, studio.midoridesign.gal.GalPlugin", e);
     }
     try {
       flutterEngine.getPlugins().add(new io.flutter.plugins.imagepicker.ImagePickerPlugin());
