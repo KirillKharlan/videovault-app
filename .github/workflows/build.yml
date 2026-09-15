@@ -24,6 +24,10 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Clean (сбрасывает возможный битый/неполный кэш пакетов с
+              прошлого неудачного билда)
+        run: flutter clean
+
       - name: Install dependencies
         run: flutter pub get
 
