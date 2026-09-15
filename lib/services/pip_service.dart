@@ -150,6 +150,30 @@ class PipService {
     }
   }
 
+  // ── Сохранение файла на устройство (нативный SAF-диалог) ────────────────
+  //
+  // Реализовано полностью нативно (Intent.ACTION_CREATE_DOCUMENT в
+  // MainActivity.kt), без стороннего пакета — после нескольких подряд
+  // ломавшихся релизов file_picker/file_saver было решено не зависеть от
+  // непредсказуемых мажорных обновлений чужих пакетов для такой простой
+  // задачи. Копирование байт идёт потоково на нативной стороне (файл не
+  // грузится в Dart целиком).
+  //
+  // Возвращает true, если файл сохранён; false, если пользователь отменил
+  // диалог выбора места. Бросает исключение при реальной ошибке записи.
+  Future<bool> saveFileWithPicker({
+    required String sourcePath,
+    required String suggestedName,
+    required String mimeType,
+  }) async {
+    final saved = await _channel.invokeMethod<bool>('saveFileWithPicker', {
+      'sourcePath': sourcePath,
+      'suggestedName': suggestedName,
+      'mimeType': mimeType,
+    });
+    return saved ?? false;
+  }
+
   /// Android принимает соотношение как целочисленную дробь (Rational), а не double.
   /// Приводим aspectRatio (например 1.777...) к приближённой дроби num/den.
   (int, int) _ratioToFraction(double ratio) {

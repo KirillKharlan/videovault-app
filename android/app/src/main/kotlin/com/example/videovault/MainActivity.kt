@@ -10,11 +10,14 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.drawable.Icon
+import android.net.Uri
 import android.os.Build
 import android.util.Rational
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.io.FileInputStream
 
 class MainActivity : FlutterActivity() {
 
@@ -27,10 +30,19 @@ class MainActivity : FlutterActivity() {
         const val ACTION_SKIP_NEXT_BROADCAST = "com.videovault.ACTION_SKIP_NEXT"
         const val ACTION_FORWARD_10_BROADCAST = "com.videovault.ACTION_FORWARD_10"
         const val ACTION_STOP_BROADCAST = "com.videovault.ACTION_STOP"
+
+        const val REQUEST_CODE_SAVE_FILE = 4201
     }
 
     private val CHANNEL = "com.videovault/pip"
     private var pipChannel: MethodChannel? = null
+
+    // Ожидающее сохранение файла через системный SAF-диалог "Сохранить как".
+    // ACTION_CREATE_DOCUMENT асинхронный (результат приходит в
+    // onActivityResult), поэтому Result от MethodChannel держим здесь, пока
+    // не придёт ответ от системы.
+    private var pendingSaveResult: MethodChannel.Result? = null
+    private var pendingSaveSourcePath: String? = null
 
     private var shouldAutoEnterPip = false
     private var pipAspectNumerator = 16
@@ -161,6 +173,32 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(null)
                 }
+                "saveFileWithPicker" -> {
+                    val sourcePath = call.argument<String>("sourcePath")
+                    val suggestedName = call.argument<String>("suggestedName") ?: "file"
+                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
+                    if (sourcePath == null || !File(sourcePath).exists()) {
+                        result.error("NO_SOURCE", "Исходный файл не найден", null)
+                    } else if (pendingSaveResult != null) {
+                        // Уже есть незавершённое сохранение — не даём запустить второе.
+                        result.error("BUSY", "Уже открыт диалог сохранения", null)
+                    } else {
+                        pendingSaveResult = result
+                        pendingSaveSourcePath = sourcePath
+                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = mimeType
+                            putExtra(Intent.EXTRA_TITLE, suggestedName)
+                        }
+                        try {
+                            startActivityForResult(intent, REQUEST_CODE_SAVE_FILE)
+                        } catch (e: Exception) {
+                            pendingSaveResult = null
+                            pendingSaveSourcePath = null
+                            result.error("NO_PICKER", "Не удалось открыть системный диалог: ${e.message}", null)
+                        }
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -240,5 +278,42 @@ class MainActivity : FlutterActivity() {
             receiverRegistered = false
         }
         super.onDestroy()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_CODE_SAVE_FILE) return
+
+        val pendingResult = pendingSaveResult
+        val sourcePath = pendingSaveSourcePath
+        pendingSaveResult = null
+        pendingSaveSourcePath = null
+
+        if (pendingResult == null) return // отменён/дубль — нечего завершать
+
+        val destUri: Uri? = if (resultCode == RESULT_OK) data?.data else null
+        if (destUri == null) {
+            // Пользователь отменил диалог — это НЕ ошибка, просто отмена.
+            pendingResult.success(false)
+            return
+        }
+        if (sourcePath == null) {
+            pendingResult.error("NO_SOURCE", "Исходный файл потерян", null)
+            return
+        }
+
+        try {
+            // Потоковое копирование — файл не грузится в память целиком, что
+            // важно для больших видео (в отличие от предыдущего подхода
+            // через file_picker + bytes, который читал весь файл в RAM).
+            contentResolver.openOutputStream(destUri)?.use { output ->
+                FileInputStream(File(sourcePath)).use { input ->
+                    input.copyTo(output, bufferSize = 1 shl 16) // 64KB буфер
+                }
+            } ?: throw Exception("Не удалось открыть выбранное место для записи")
+            pendingResult.success(true)
+        } catch (e: Exception) {
+            pendingResult.error("WRITE_FAILED", "Не удалось сохранить файл: ${e.message}", null)
+        }
     }
 }

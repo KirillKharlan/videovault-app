@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_audio/return_code.dart';
+import 'pip_service.dart';
 
 /// Экспорт локально скачанных видео: сохранение в системную галерею,
 /// сохранение файла (видео или mp3) в память устройства, и конвертация
@@ -47,29 +47,26 @@ class MediaExportService {
   /// открывает НАСТОЯЩИЙ системный диалог "Сохранить как" (Storage Access
   /// Framework), пользователь сам выбирает папку и видит, куда сохраняет.
   ///
-  /// Раньше здесь использовался пакет file_saver, который на Android
-  /// сохранял файл молча в фиксированную папку без какого-либо диалога —
-  /// именно поэтому казалось, что "экспорт не работает": на самом деле он
-  /// работал, просто результат было невозможно найти.
-  ///
-  /// Примечание: читает файл целиком в память перед сохранением — для
-  /// очень больших видео (несколько ГБ) это заметно по RAM. Для mp3 и
-  /// большинства видео не проблема.
+  /// Реализовано нативно (см. PipService.saveFileWithPicker /
+  /// MainActivity.kt), без стороннего пакета — после того как и file_saver,
+  /// и следом file_picker оказались нестабильными между версиями (то без
+  /// диалога вовсе, то ломающийся build из-за смены их внутреннего API),
+  /// решили не зависеть от чужого пакета ради такой простой задачи.
+  /// Копирование файла идёт потоково на нативной стороне — в отличие от
+  /// прошлой реализации, весь файл НЕ загружается в память Dart.
   ///
   /// Возвращает true, если файл сохранён; false, если пользователь отменил
   /// диалог выбора места.
   Future<bool> saveToDevice(String filePath, {required String fileName}) async {
-    final bytes = await File(filePath).readAsBytes();
     final dotIndex = fileName.lastIndexOf('.');
     final name = dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
     final ext = dotIndex > 0 ? fileName.substring(dotIndex + 1) : 'mp4';
+    final mimeType = ext == 'mp3' ? 'audio/mpeg' : 'video/mp4';
 
-    final savedPath = await FilePicker.saveFile(
-      dialogTitle: 'Сохранить как',
-      fileName: '$name.$ext',
-      type: FileType.any,
-      bytes: bytes,
+    return PipService.instance.saveFileWithPicker(
+      sourcePath: filePath,
+      suggestedName: '$name.$ext',
+      mimeType: mimeType,
     );
-    return savedPath != null;
   }
 }
