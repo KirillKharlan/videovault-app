@@ -1,0 +1,67 @@
+plugins {
+    id("com.android.application")
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id("dev.flutter.flutter-gradle-plugin")
+}
+
+android {
+    namespace = "com.example.videovault"
+    compileSdk = 37
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
+    }
+
+    // Постоянный keystore (android/keystore/videovault.keystore, закоммичен в репо).
+    // Раньше здесь неявно использовался debug-конфиг по умолчанию — на GitHub
+    // Actions он создаётся заново на каждом раннере => разная подпись каждой
+    // сборки => Android требует полного удаления вместо обновления поверх.
+    // Переопределяем "debug" конфиг на наш зафиксированный файл — release
+    // builds уже ссылаются на signingConfigs.getByName("debug"), так что
+    // больше ничего менять не нужно.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("../keystore/videovault.keystore")
+            storePassword = "videovault123"
+            keyAlias = "videovault"
+            keyPassword = "videovault123"
+        }
+    }
+
+    defaultConfig {
+        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId = "com.example.videovault"
+        // You can update the following values to match your application needs.
+        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        minSdk = flutter.minSdkVersion
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        multiDexEnabled = true
+    }
+
+    buildTypes {
+        release {
+            // TODO: Add your own signing config for the release build.
+            // Signing with the debug keys for now, so `flutter run --release` works.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
+}
