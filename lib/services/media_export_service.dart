@@ -13,10 +13,11 @@ class MediaExportService {
   static final instance = MediaExportService._();
 
   /// Конвертирует mp4 в mp3 (только аудиодорожка, без перекодирования
-  /// видео — быстро). Результат кладётся во временную папку приложения,
-  /// вызывающий код сам решает, что с ним делать дальше (сохранить в
-  /// галерею/на устройство и т.д.).
-  Future<String> convertToMp3(String videoPath) async {
+  /// видео — быстро). Если заданы [start]/[end] — конвертируется только
+  /// этот диапазон (например, чтобы вырезать заставку). Результат кладётся
+  /// во временную папку приложения, вызывающий код сам решает, что с ним
+  /// делать дальше (сохранить в галерею/на устройство и т.д.).
+  Future<String> convertToMp3(String videoPath, {Duration? start, Duration? end}) async {
     final tmpDir = await getTemporaryDirectory();
     final base = videoPath.split(Platform.pathSeparator).last
         .replaceAll(RegExp(r'\.[^.]+$'), '');
@@ -25,8 +26,9 @@ class MediaExportService {
     final existing = File(outPath);
     if (await existing.exists()) await existing.delete();
 
+    final trimArgs = _trimArgs(start, end);
     final session = await FFmpegKit.execute(
-      '-y -i "$videoPath" -vn -acodec libmp3lame -q:a 2 "$outPath"',
+      '-y $trimArgs-i "$videoPath" -vn -acodec libmp3lame -q:a 2 "$outPath"',
     );
     final code = await session.getReturnCode();
     if (!ReturnCode.isSuccess(code)) {
@@ -34,6 +36,50 @@ class MediaExportService {
       throw Exception('Конвертация в MP3 не удалась: ${logs ?? "нет логов"}');
     }
     return outPath;
+  }
+
+  /// Обрезает видео до диапазона [start]—[end] БЕЗ перекодирования
+  /// (`-c copy` — только вырезает нужный кусок контейнера, поэтому быстро и
+  /// не сажает батарею, в отличие от полного перекодирования). Есть нюанс:
+  /// при `-c copy` начало реза иногда округляется до ближайшего опорного
+  /// кадра (keyframe) видео — на глаз это почти никогда не заметно, но
+  /// точность до кадра не гарантирована. Результат — во временной папке.
+  Future<String> trimVideo(String videoPath, Duration start, Duration end) async {
+    final tmpDir = await getTemporaryDirectory();
+    final base = videoPath.split(Platform.pathSeparator).last
+        .replaceAll(RegExp(r'\.[^.]+$'), '');
+    final outPath = '${tmpDir.path}/${base}_trimmed.mp4';
+
+    final existing = File(outPath);
+    if (await existing.exists()) await existing.delete();
+
+    final session = await FFmpegKit.execute(
+      '-y ${_trimArgs(start, end)}-i "$videoPath" -c copy "$outPath"',
+    );
+    final code = await session.getReturnCode();
+    if (!ReturnCode.isSuccess(code)) {
+      final logs = await session.getAllLogsAsString();
+      throw Exception('Обрезка видео не удалась: ${logs ?? "нет логов"}');
+    }
+    return outPath;
+  }
+
+  /// -ss/-to ДО -i — так ffmpeg сразу перематывает на нужное место, а не
+  /// декодирует и отбрасывает всё, что до старта диапазона (заметно быстрее
+  /// на длинных видео, особенно при -c copy).
+  String _trimArgs(Duration? start, Duration? end) {
+    String fmt(Duration d) {
+      final h = d.inHours;
+      final m = d.inMinutes.remainder(60);
+      final s = d.inSeconds.remainder(60);
+      final ms = d.inMilliseconds.remainder(1000);
+      return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:'
+          '${s.toString().padLeft(2, '0')}.${ms.toString().padLeft(3, '0')}';
+    }
+    var args = '';
+    if (start != null) args += '-ss ${fmt(start)} ';
+    if (end != null) args += '-to ${fmt(end)} ';
+    return args;
   }
 
   /// Сохраняет видео в системную галерею (Фото/Видео на Android, Photos

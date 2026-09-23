@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:cross_file/cross_file.dart';
 import '../models/database.dart';
 import '../services/video_edit_service.dart';
 import 'safe_bottom_sheet.dart';
 
 /// Меню действий по долгому нажатию на карточку видео: переименовать,
-/// сменить/сбросить обложку. Общее для главного экрана и экрана альбомов.
+/// сменить/сбросить обложку, поделиться файлом. Общее для главного экрана
+/// и экрана альбомов.
 Future<void> showVideoActionsSheet(
   BuildContext context,
   Video video, {
@@ -20,6 +23,23 @@ Future<void> showVideoActionsSheet(
         child: Text(video.title,
             maxLines: 1, overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 14, color: Colors.white54)),
+      ),
+      ListTile(
+        leading: const Icon(Icons.share_outlined),
+        title: const Text('Поделиться видео'),
+        subtitle: const Text(
+          'Отправит сам файл (в WhatsApp/Telegram/итд), а не ссылку на источник',
+          style: TextStyle(fontSize: 11),
+        ),
+        onTap: () async {
+          Navigator.pop(sheetCtx);
+          // Системное меню "Поделиться" с самим файлом — SharePlus сам
+          // заворачивает путь в content:// (через свой FileProvider), так
+          // что сторонним приложениям не нужен прямой доступ к файлу.
+          await SharePlus.instance.share(
+            ShareParams(files: [XFile(video.filePath)], text: video.title),
+          );
+        },
       ),
       ListTile(
         leading: const Icon(Icons.edit_outlined),

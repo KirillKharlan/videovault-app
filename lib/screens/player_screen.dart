@@ -359,15 +359,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _exportVideo({required bool toGallery}) async {
     final video = _mgr.currentVideo;
     if (video == null) return;
-    _showExportProgress('Сохраняем видео…');
+
+    final range = await _pickExportRange(video);
+    if (range == 'cancelled') return; // диалог выбора отменили
+
+    _showExportProgress(range == null ? 'Сохраняем видео…' : 'Обрезаем и сохраняем видео…');
     try {
+      String sourcePath = video.filePath;
+      String fileName = video.filePath.split(Platform.pathSeparator).last;
+      if (range is RepeatRange) {
+        sourcePath = await MediaExportService.instance.trimVideo(
+            video.filePath, range.start, range.end);
+        fileName = sourcePath.split(Platform.pathSeparator).last;
+      }
+
       if (toGallery) {
-        await MediaExportService.instance.saveVideoToGallery(video.filePath);
+        await MediaExportService.instance.saveVideoToGallery(sourcePath);
         _closeExportProgress();
         _showSnack('Видео сохранено в галерею');
       } else {
-        final name = video.filePath.split(Platform.pathSeparator).last;
-        final saved = await MediaExportService.instance.saveToDevice(video.filePath, fileName: name);
+        final saved = await MediaExportService.instance.saveToDevice(sourcePath, fileName: fileName);
         _closeExportProgress();
         _showSnack(saved ? 'Видео сохранено на устройство' : 'Сохранение отменено');
       }
@@ -380,9 +391,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _exportAudio() async {
     final video = _mgr.currentVideo;
     if (video == null) return;
+
+    final range = await _pickExportRange(video);
+    if (range == 'cancelled') return; // диалог выбора отменили
+
     _showExportProgress('Конвертируем в MP3…');
     try {
-      final mp3Path = await MediaExportService.instance.convertToMp3(video.filePath);
+      final start = range is RepeatRange ? range.start : null;
+      final end = range is RepeatRange ? range.end : null;
+      final mp3Path = await MediaExportService.instance.convertToMp3(
+          video.filePath, start: start, end: end);
       final name = mp3Path.split(Platform.pathSeparator).last;
       final saved = await MediaExportService.instance.saveToDevice(mp3Path, fileName: name);
       _closeExportProgress();
@@ -391,6 +409,47 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _closeExportProgress();
       _showSnack('Не удалось сконвертировать: $e', isError: true);
     }
+  }
+
+  /// Если у видео есть сохранённый диапазон повтора по умолчанию —
+  /// спрашивает, экспортировать целиком или только этот диапазон (например,
+  /// без заставки). Возвращает:
+  ///   null       — диапазона нет вообще, диалог не показывался, продолжаем
+  ///                как обычно (целиком);
+  ///   'full'     — диалог показан, явно выбрали "Целиком";
+  ///   'cancelled'— диалог показан, но закрыли без выбора — экспорт нужно
+  ///                прервать совсем, а не тихо продолжить как "целиком";
+  ///   RepeatRange— выбрали "Только диапазон", обрезать по нему.
+  Future<Object?> _pickExportRange(Video video) async {
+    if (video.id == null) return null;
+    final range = await _db.getDefaultRange(video.id!);
+    if (range == null) return null;
+
+    final choice = await showDialog<Object>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Что сохранить?'),
+        content: Text('У этого видео есть сохранённый диапазон '
+            '(${range.rangeLabel}) — например, чтобы пропустить заставку.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, 'cancelled'),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, 'full'),
+            child: const Text('Целиком'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, range),
+            child: const Text('Только диапазон'),
+          ),
+        ],
+      ),
+    );
+    // Закрытие свайпом/системной кнопкой "назад" тоже должно считаться
+    // отменой, а не тихим "целиком" — showDialog в этом случае вернёт null.
+    return choice ?? 'cancelled';
   }
 
   bool _exportDialogOpen = false;
