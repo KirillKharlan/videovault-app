@@ -58,6 +58,7 @@ class Video {
   final int fileSize;      // байты
   final int? albumId;
   final bool letterboxLandscape; // вертикальное видео показывать в горизонтальной рамке с полосами
+  final int lastPositionMs; // где остановились в прошлый раз (для "продолжить просмотр")
   final DateTime addedAt;
 
   Video({
@@ -71,6 +72,7 @@ class Video {
     this.fileSize = 0,
     this.albumId,
     this.letterboxLandscape = false,
+    this.lastPositionMs = 0,
     DateTime? addedAt,
   }) : addedAt = addedAt ?? DateTime.now();
 
@@ -85,6 +87,7 @@ class Video {
         'file_size': fileSize,
         'album_id': albumId,
         'letterbox_landscape': letterboxLandscape ? 1 : 0,
+        'last_position_ms': lastPositionMs,
         'added_at': addedAt.millisecondsSinceEpoch,
       };
 
@@ -99,6 +102,7 @@ class Video {
         fileSize: m['file_size'] ?? 0,
         albumId: m['album_id'],
         letterboxLandscape: (m['letterbox_landscape'] ?? 0) == 1,
+        lastPositionMs: m['last_position_ms'] ?? 0,
         addedAt: DateTime.fromMillisecondsSinceEpoch(m['added_at']),
       );
 
@@ -106,6 +110,7 @@ class Video {
     int? id, String? title, String? filePath, String? thumbnailPath,
     String? sourceUrl, String? platform, int? duration, int? fileSize,
     int? albumId, bool clearAlbum = false, bool? letterboxLandscape,
+    int? lastPositionMs,
   }) => Video(
         id: id ?? this.id,
         title: title ?? this.title,
@@ -117,6 +122,7 @@ class Video {
         fileSize: fileSize ?? this.fileSize,
         albumId: clearAlbum ? null : (albumId ?? this.albumId),
         letterboxLandscape: letterboxLandscape ?? this.letterboxLandscape,
+        lastPositionMs: lastPositionMs ?? this.lastPositionMs,
         addedAt: addedAt,
       );
 
@@ -230,7 +236,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'videovault.db');
     return openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE albums (
@@ -252,6 +258,7 @@ class AppDatabase {
             file_size INTEGER DEFAULT 0,
             album_id INTEGER REFERENCES albums(id) ON DELETE SET NULL,
             letterbox_landscape INTEGER DEFAULT 0,
+            last_position_ms INTEGER DEFAULT 0,
             added_at INTEGER NOT NULL
           )
         ''');
@@ -284,6 +291,10 @@ class AppDatabase {
         if (oldVersion < 3) {
           await db.execute(
               'ALTER TABLE videos ADD COLUMN letterbox_landscape INTEGER DEFAULT 0');
+        }
+        if (oldVersion < 4) {
+          await db.execute(
+              'ALTER TABLE videos ADD COLUMN last_position_ms INTEGER DEFAULT 0');
         }
       },
     );
@@ -400,6 +411,16 @@ class AppDatabase {
     await d.update('videos', {'letterbox_landscape': letterboxLandscape ? 1 : 0},
         where: 'id = ?', whereArgs: [id]);
     DBChangeNotifier.instance.bump();
+  }
+
+  /// Сохраняет позицию просмотра для "продолжить с места остановки".
+  /// Без DBChangeNotifier.bump() специально — вызывается часто (раз в
+  /// несколько секунд во время просмотра), а bump() заставил бы списки
+  /// видео на Home/Albums перезагружаться в реальном времени без надобности.
+  Future<void> updateLastPosition(int id, int positionMs) async {
+    final d = await db;
+    await d.update('videos', {'last_position_ms': positionMs},
+        where: 'id = ?', whereArgs: [id]);
   }
 
   // ── Repeat ranges ─────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -49,6 +50,17 @@ class PlaybackManager extends ChangeNotifier {
 
   bool _wakelockOn = false;
 
+  // ── Продолжить с места остановки ────────────────────────────────────
+  // Порог, ниже/выше которого не считаем нужным ни сохранять, ни
+  // предлагать резюме — самое начало или практически конец видео.
+  static const _resumeThreshold = Duration(seconds: 5);
+  DateTime? _lastPositionSaveTime;
+
+  // ── Таймер сна ───────────────────────────────────────────────────────
+  Duration? sleepTimerRemaining;
+  Timer? _sleepTimer;
+  DateTime? _sleepTimerEndsAt;
+
   bool get hasNext => playlist != null && currentIndex < playlist!.length - 1;
   bool get isPlaying => controller?.value.isPlaying ?? false;
 
@@ -94,7 +106,19 @@ class PlaybackManager extends ChangeNotifier {
     _endHandled = false;
 
     if (activeRange != null) {
+      // Сохранённый диапазон повтора — это осознанный выбор пользователя
+      // (например, "пропускать заставку"), он приоритетнее обычного
+      // "продолжить с места остановки".
       await controller!.seekTo(activeRange!.start);
+    } else {
+      final saved = Duration(milliseconds: video.lastPositionMs);
+      final dur = controller!.value.duration;
+      // Не резюмируем совсем в начале (нечего продолжать) и не резюмируем
+      // совсем у конца (видео практически досмотрено — начинать заново
+      // логичнее, чем упереться в последние секунды).
+      if (saved > _resumeThreshold && saved < dur - _resumeThreshold) {
+        await controller!.seekTo(saved);
+      }
     }
 
     chewieController = ChewieController(
@@ -158,6 +182,23 @@ class PlaybackManager extends ChangeNotifier {
 
     _syncWakelock();
     _syncPipState();
+    _maybeSavePosition(pos, dur);
+  }
+
+  /// Сохраняет позицию не чаще раза в 5 секунд — на каждый тик было бы
+  /// слишком часто для записи на диск. Не сохраняем совсем в начале/конце
+  /// ролика — нет смысла запоминать "продолжить с 0:02" или с последней секунды.
+  void _maybeSavePosition(Duration pos, Duration dur) {
+    final video = currentVideo;
+    if (video?.id == null) return;
+    if (pos <= _resumeThreshold || pos >= dur - _resumeThreshold) return;
+    final now = DateTime.now();
+    if (_lastPositionSaveTime != null &&
+        now.difference(_lastPositionSaveTime!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastPositionSaveTime = now;
+    _db.updateLastPosition(video!.id!, pos.inMilliseconds);
   }
 
   Future<void> playNext() async {
@@ -203,6 +244,9 @@ class PlaybackManager extends ChangeNotifier {
     if (controller == null) return;
     if (controller!.value.isPlaying) {
       controller!.pause();
+      final video = currentVideo;
+      final pos = controller!.value.position;
+      if (video?.id != null) _db.updateLastPosition(video!.id!, pos.inMilliseconds);
     } else {
       controller!.play();
     }
@@ -323,6 +367,16 @@ class PlaybackManager extends ChangeNotifier {
   }
 
   Future<void> _disposeCurrent() async {
+    final video = currentVideo;
+    final ctrl = controller;
+    if (video?.id != null && ctrl != null && ctrl.value.isInitialized) {
+      final pos = ctrl.value.position;
+      final dur = ctrl.value.duration;
+      if (pos > _resumeThreshold && pos < dur - _resumeThreshold) {
+        await _db.updateLastPosition(video!.id!, pos.inMilliseconds);
+      }
+    }
+    cancelSleepTimer();
     controller?.removeListener(_onTick);
     chewieController?.dispose();
     await controller?.dispose();
@@ -341,5 +395,37 @@ class PlaybackManager extends ChangeNotifier {
       _wakelockOn = false;
       await WakelockPlus.disable();
     }
+  }
+
+  // ── Таймер сна ───────────────────────────────────────────────────────
+  // Ставит на паузу (не закрывает плеер) по истечении времени — чтобы
+  // случайно не потерять место просмотра/не прервать фоновый звук совсем,
+  // просто перестаёт играть дальше само по себе.
+
+  void setSleepTimer(Duration duration) {
+    _sleepTimer?.cancel();
+    _sleepTimerEndsAt = DateTime.now().add(duration);
+    sleepTimerRemaining = duration;
+    notifyListeners();
+    _sleepTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final endsAt = _sleepTimerEndsAt;
+      if (endsAt == null) return;
+      final remaining = endsAt.difference(DateTime.now());
+      if (remaining <= Duration.zero) {
+        controller?.pause();
+        cancelSleepTimer();
+        notifyListeners();
+      } else {
+        sleepTimerRemaining = remaining;
+        notifyListeners();
+      }
+    });
+  }
+
+  void cancelSleepTimer() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepTimerEndsAt = null;
+    sleepTimerRemaining = null;
   }
 }

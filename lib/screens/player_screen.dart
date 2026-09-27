@@ -315,6 +315,34 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await PipService.instance.enterPip(aspectRatio: aspect);
   }
 
+  void _showSleepTimerPicker() {
+    const presets = [15, 30, 45, 60];
+    showSafeModalBottomSheet(
+      context: context,
+      builder: (sheetCtx) => Column(mainAxisSize: MainAxisSize.min, children: [
+        const Padding(padding: EdgeInsets.all(16),
+            child: Text('Таймер сна', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+        ...presets.map((mins) => ListTile(
+              leading: const Icon(Icons.bedtime_outlined),
+              title: Text('$mins минут'),
+              onTap: () {
+                _mgr.setSleepTimer(Duration(minutes: mins));
+                Navigator.pop(sheetCtx);
+              },
+            )),
+        if (_mgr.sleepTimerRemaining != null)
+          ListTile(
+            leading: const Icon(Icons.close, color: Colors.redAccent),
+            title: const Text('Отключить таймер', style: TextStyle(color: Colors.redAccent)),
+            onTap: () {
+              _mgr.cancelSleepTimer();
+              Navigator.pop(sheetCtx);
+            },
+          ),
+      ]),
+    );
+  }
+
   void _minimizeInApp() {
     _minimizing = true;
     _mgr.minimize();
@@ -503,6 +531,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
           subtitle: const Text('Работает даже при полном закрытии приложения',
               style: TextStyle(fontSize: 11)),
           onTap: () { Navigator.pop(context); _enableBackgroundAudio(); },
+        ),
+        ListTile(
+          leading: Icon(_mgr.sleepTimerRemaining != null
+              ? Icons.bedtime : Icons.bedtime_outlined),
+          title: Text(_mgr.sleepTimerRemaining != null
+              ? 'Таймер сна: ${_fmt(_mgr.sleepTimerRemaining!)}'
+              : 'Таймер сна'),
+          subtitle: const Text('Поставит на паузу по истечении времени',
+              style: TextStyle(fontSize: 11)),
+          onTap: () { Navigator.pop(context); _showSleepTimerPicker(); },
         ),
         ListTile(
           leading: const Icon(Icons.folder_outlined),
