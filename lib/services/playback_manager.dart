@@ -16,6 +16,17 @@ import 'pip_service.dart';
 /// приложения — не в PlayerScreen. Иначе после сворачивания и закрытия
 /// экрана плеера (dispose PlayerScreen) кнопки в уведомлении/PiP переставали
 /// бы работать, хотя видео продолжает играть.
+/// Когда у видео сохранены И диапазон повтора, И позиция остановки —
+/// PlaybackManager сам не решает, что применить, а выставляет это поле,
+/// чтобы PlayerScreen спросил пользователя. По умолчанию (пока не спросили)
+/// уже применён диапазон — он безопаснее как дефолт, но пользователь может
+/// переключиться на позицию.
+class ResumeChoice {
+  final Duration position;
+  final RepeatRange range;
+  ResumeChoice(this.position, this.range);
+}
+
 class PlaybackManager extends ChangeNotifier {
   PlaybackManager._internal() {
     PipService.instance.onPlayPauseAction = togglePlayPause;
@@ -55,6 +66,10 @@ class PlaybackManager extends ChangeNotifier {
   // предлагать резюме — самое начало или практически конец видео.
   static const _resumeThreshold = Duration(seconds: 5);
   DateTime? _lastPositionSaveTime;
+  /// Не null только когда у видео есть И диапазон, И позиция остановки —
+  /// PlayerScreen должен спросить пользователя и, если выбрана позиция,
+  /// заново перемотать (по умолчанию уже применён диапазон при загрузке).
+  ResumeChoice? pendingResumeChoice;
 
   // ── Таймер сна ───────────────────────────────────────────────────────
   Duration? sleepTimerRemaining;
@@ -104,21 +119,25 @@ class PlaybackManager extends ChangeNotifier {
     adhocStart = null;
     adhocEnd = null;
     _endHandled = false;
+    pendingResumeChoice = null;
 
-    if (activeRange != null) {
+    final saved = Duration(milliseconds: video.lastPositionMs);
+    final dur = controller!.value.duration;
+    final hasSavedPosition = saved > _resumeThreshold && saved < dur - _resumeThreshold;
+
+    if (activeRange != null && hasSavedPosition) {
+      // И диапазон, и сохранённая позиция — не решаем молча, спрашиваем
+      // пользователя (см. PlayerScreen). Пока не спросили — диапазон как
+      // безопасный дефолт (уже подразумевает осознанный выбор пользователя).
+      pendingResumeChoice = ResumeChoice(saved, activeRange!);
+      await controller!.seekTo(activeRange!.start);
+    } else if (activeRange != null) {
       // Сохранённый диапазон повтора — это осознанный выбор пользователя
       // (например, "пропускать заставку"), он приоритетнее обычного
       // "продолжить с места остановки".
       await controller!.seekTo(activeRange!.start);
-    } else {
-      final saved = Duration(milliseconds: video.lastPositionMs);
-      final dur = controller!.value.duration;
-      // Не резюмируем совсем в начале (нечего продолжать) и не резюмируем
-      // совсем у конца (видео практически досмотрено — начинать заново
-      // логичнее, чем упереться в последние секунды).
-      if (saved > _resumeThreshold && saved < dur - _resumeThreshold) {
-        await controller!.seekTo(saved);
-      }
+    } else if (hasSavedPosition) {
+      await controller!.seekTo(saved);
     }
 
     chewieController = ChewieController(
@@ -170,6 +189,13 @@ class PlaybackManager extends ChangeNotifier {
         pos >= dur - const Duration(milliseconds: 300) &&
         !ctrl.value.isPlaying) {
       _endHandled = true;
+      // Досмотрено до конца — сохранённая позиция теряет смысл (нечего
+      // "продолжать"), сбрасываем её, а не оставляем зависшей у самого
+      // конца или на месте, где остановились в прошлый раз до этого.
+      final finishedVideo = currentVideo;
+      if (finishedVideo?.id != null) {
+        _db.updateLastPosition(finishedVideo!.id!, 0);
+      }
       if (hasNext) {
         playNext();
       } else if (playlist != null && playlist!.length > 1) {

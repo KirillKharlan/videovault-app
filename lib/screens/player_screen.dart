@@ -103,6 +103,44 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // Соотношение сторон могло смениться (портрет/пейзаж), либо включился/
     // выключился фоновый звук — держим авто-вход в PiP синхронизированным.
     _syncAutoEnterPip();
+    _maybeShowResumeChoice();
+  }
+
+  /// Если у видео сохранены И диапазон повтора, И позиция остановки —
+  /// спрашивает, что использовать. По умолчанию PlaybackManager уже
+  /// перемотал на диапазон при загрузке — если выбрали "с места остановки",
+  /// просто перематываем ещё раз поверх.
+  void _maybeShowResumeChoice() {
+    final choice = _mgr.pendingResumeChoice;
+    if (choice == null) return;
+    _mgr.pendingResumeChoice = null; // сразу гасим — не спрашивать повторно на след. тике
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final result = await showDialog<String>(
+        context: context,
+        builder: (dialogCtx) => AlertDialog(
+          title: const Text('Продолжить просмотр?'),
+          content: Text('У этого видео есть и сохранённая позиция '
+              '(${_fmt(choice.position)}), и диапазон повтора '
+              '(${choice.range.rangeLabel}). Что использовать?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx, 'range'),
+              child: const Text('Диапазон'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx, 'position'),
+              child: const Text('С места остановки'),
+            ),
+          ],
+        ),
+      );
+      if (result == 'position' && mounted) {
+        await _mgr.controller?.seekTo(choice.position);
+      }
+      // result == 'range' (или диалог закрыли без выбора) — уже применено
+      // по умолчанию при загрузке, ничего дополнительно делать не нужно.
+    });
   }
 
   void _onPipModeChanged(bool isInPip) {
@@ -781,6 +819,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   child: const Text('Диапазоны', style: TextStyle(fontSize: 12)),
                 ),
               ]),
+            ),
+
+          // Видимый отсчёт таймера сна — виден постоянно, пока активен, не
+          // только в тексте пункта меню (туда ещё нужно было зайти, чтобы
+          // увидеть). Тап — сразу к пикеру, чтобы быстро поменять/отключить.
+          if (_mgr.sleepTimerRemaining != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: InkWell(
+                onTap: _showSleepTimerPicker,
+                child: Row(children: [
+                  const Icon(Icons.bedtime, size: 14, color: Color(0xFF7C5CFC)),
+                  const SizedBox(width: 6),
+                  Text('Таймер сна: ${_fmt(_mgr.sleepTimerRemaining!)}',
+                      style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                ]),
+              ),
             ),
 
           // Слайдер громкости
