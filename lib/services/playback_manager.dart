@@ -6,6 +6,7 @@ import 'package:chewie/chewie.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/database.dart';
 import 'pip_service.dart';
+import 'settings_service.dart';
 
 /// Центральное хранилище состояния воспроизведения — живёт ВНЕ PlayerScreen,
 /// поэтому видео продолжает играть при сворачивании плеера (мини-окно внутри
@@ -121,8 +122,13 @@ class PlaybackManager extends ChangeNotifier {
     _endHandled = false;
     pendingResumeChoice = null;
 
-    final saved = Duration(milliseconds: video.lastPositionMs);
     final dur = controller!.value.duration;
+    // В режиме музыки "продолжить с места остановки" вообще не действует —
+    // ни сохранение, ни предложение резюме. Диапазон повтора (если задан)
+    // при этом по-прежнему применяется, это отдельная фича, её не трогаем.
+    final saved = SettingsService.instance.isMusicMode
+        ? Duration.zero
+        : Duration(milliseconds: video.lastPositionMs);
     final hasSavedPosition = saved > _resumeThreshold && saved < dur - _resumeThreshold;
 
     if (activeRange != null && hasSavedPosition) {
@@ -215,6 +221,7 @@ class PlaybackManager extends ChangeNotifier {
   /// слишком часто для записи на диск. Не сохраняем совсем в начале/конце
   /// ролика — нет смысла запоминать "продолжить с 0:02" или с последней секунды.
   void _maybeSavePosition(Duration pos, Duration dur) {
+    if (SettingsService.instance.isMusicMode) return;
     final video = currentVideo;
     if (video?.id == null) return;
     if (pos <= _resumeThreshold || pos >= dur - _resumeThreshold) return;
@@ -270,9 +277,11 @@ class PlaybackManager extends ChangeNotifier {
     if (controller == null) return;
     if (controller!.value.isPlaying) {
       controller!.pause();
-      final video = currentVideo;
-      final pos = controller!.value.position;
-      if (video?.id != null) _db.updateLastPosition(video!.id!, pos.inMilliseconds);
+      if (!SettingsService.instance.isMusicMode) {
+        final video = currentVideo;
+        final pos = controller!.value.position;
+        if (video?.id != null) _db.updateLastPosition(video!.id!, pos.inMilliseconds);
+      }
     } else {
       controller!.play();
     }
@@ -395,7 +404,8 @@ class PlaybackManager extends ChangeNotifier {
   Future<void> _disposeCurrent() async {
     final video = currentVideo;
     final ctrl = controller;
-    if (video?.id != null && ctrl != null && ctrl.value.isInitialized) {
+    if (!SettingsService.instance.isMusicMode &&
+        video?.id != null && ctrl != null && ctrl.value.isInitialized) {
       final pos = ctrl.value.position;
       final dur = ctrl.value.duration;
       if (pos > _resumeThreshold && pos < dur - _resumeThreshold) {

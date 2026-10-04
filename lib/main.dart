@@ -4,7 +4,9 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'screens/home_screen.dart';
 import 'screens/albums_screen.dart';
 import 'screens/download_screen.dart';
+import 'screens/settings_screen.dart';
 import 'services/download_manager.dart';
+import 'services/settings_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,6 +14,7 @@ void main() async {
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
   ));
+  await SettingsService.instance.load();
   runApp(const VideoVaultApp());
 }
 
@@ -150,6 +153,7 @@ class _MainScreenState extends State<MainScreen> {
                   initialUrl: _sharedUrl,
                   onUrlConsumed: () => setState(() => _sharedUrl = null),
                 ),
+                const SettingsScreen(),
               ],
             ),
           ),
@@ -203,6 +207,8 @@ class _MainScreenState extends State<MainScreen> {
               selectedIcon: Icon(Icons.folder), label: 'Albums'),
           NavigationDestination(icon: Icon(Icons.download_outlined),
               selectedIcon: Icon(Icons.download), label: 'Download'),
+          NavigationDestination(icon: Icon(Icons.settings_outlined),
+              selectedIcon: Icon(Icons.settings), label: 'Settings'),
         ],
       ),
     );
