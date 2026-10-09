@@ -76,6 +76,7 @@ class DownloadService {
     int? albumId,
     String? customTitle,
     VideoInfo? info,
+    Future<VideoInfo?>? infoFuture,
     void Function(double progress, String step)? onProgress,
   }) async {
     await initNotifications();
@@ -86,7 +87,8 @@ class DownloadService {
     try {
       return await _doDownload(
         url: url, quality: quality, albumId: albumId,
-        customTitle: customTitle, info: info, onProgress: onProgress,
+        customTitle: customTitle, info: info, infoFuture: infoFuture,
+        onProgress: onProgress,
       );
     } finally {
       await WakelockPlus.disable();
@@ -99,6 +101,7 @@ class DownloadService {
     int? albumId,
     String? customTitle,
     VideoInfo? info,
+    Future<VideoInfo?>? infoFuture,
     void Function(double progress, String step)? onProgress,
   }) async {
     onProgress?.call(0, 'Запуск загрузки…');
@@ -161,13 +164,31 @@ class DownloadService {
       if (progress.isDone) break;
     }
 
+    // Инфо о видео (обложка/платформа/длительность) могла запрашиваться
+    // ПАРАЛЛЕЛЬНО со скачиванием (infoFuture) — к этому моменту она, как
+    // правило, давно готова, ждём только на случай, если нет. Ошибка или
+    // таймаут инфо — не фатальны: видео просто сохранится без обложки.
+    VideoInfo? resolvedInfo = info;
+    if (resolvedInfo == null && infoFuture != null) {
+      try {
+        resolvedInfo = await infoFuture.timeout(const Duration(seconds: 25));
+      } catch (_) {
+        resolvedInfo = null;
+      }
+    }
+
     // 3. Скачиваем файл с сервера на телефон (тоже с ретраями)
     onProgress?.call(0.97, 'Сохранение на телефон…');
     final dir = await _videosDir();
 
+    // "video" — плейсхолдер сервера, если название на тот момент ещё не
+    // было известно; тогда берём название из инфо.
+    final serverTitle = (progress.title != null && progress.title != 'video')
+        ? progress.title
+        : null;
     final displayTitle = (customTitle != null && customTitle.trim().isNotEmpty)
         ? customTitle.trim()
-        : (progress.title ?? 'video');
+        : (serverTitle ?? resolvedInfo?.title ?? 'video');
 
     final ext = (progress.filename != null && progress.filename!.contains('.'))
         ? progress.filename!.split('.').last
@@ -196,7 +217,7 @@ class DownloadService {
 
     // 4. Скачиваем и сохраняем миниатюру (если есть URL от YouTube)
     String? thumbPath;
-    final thumbUrl = info?.thumbnail;
+    final thumbUrl = resolvedInfo?.thumbnail;
     if (thumbUrl != null && thumbUrl.isNotEmpty) {
       onProgress?.call(0.99, 'Сохранение превью…');
       thumbPath = await _downloadThumbnail(thumbUrl, taskId);
@@ -213,8 +234,8 @@ class DownloadService {
       filePath: filePath,
       thumbnailPath: thumbPath,
       sourceUrl: url,
-      platform: info?.platform,
-      duration: info?.duration ?? 0,
+      platform: resolvedInfo?.platform,
+      duration: resolvedInfo?.duration ?? 0,
       fileSize: fileSize,
       albumId: albumId,
     );

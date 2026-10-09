@@ -37,6 +37,7 @@ class DownloadManager extends ChangeNotifier {
     int? albumId,
     String? customTitle,
     VideoInfo? info,
+    Future<VideoInfo?>? infoFuture,
     void Function(Video video)? onDone,
     void Function(Object error)? onError,
   }) async {
@@ -45,6 +46,14 @@ class DownloadManager extends ChangeNotifier {
     progress = 0;
     statusText = 'Запуск…';
     this.info = info;
+    // Инфо может приходить ПОЗЖЕ старта скачивания (параллельный запрос) —
+    // как только придёт, подставляем её (обложка/платформа в плашке и т.д.).
+    infoFuture?.then((resolved) {
+      if (resolved != null && isDownloading) {
+        this.info = resolved;
+        notifyListeners();
+      }
+    }).catchError((_) {});
     this.customTitle = (customTitle?.trim().isNotEmpty == true) ? customTitle!.trim() : null;
     error = null;
     notifyListeners();
@@ -56,6 +65,7 @@ class DownloadManager extends ChangeNotifier {
         albumId: albumId,
         customTitle: customTitle,
         info: info,
+        infoFuture: infoFuture,
         onProgress: (p, step) {
           progress = p;
           statusText = step;

@@ -52,20 +52,32 @@ class _DownloadScreenState extends State<DownloadScreen> {
     if (mounted) setState(() => _albums = albums);
   }
 
-  Future<void> _fetchInfo() async {
+  /// Запрашивает инфо о видео и обновляет форму. Возвращает полученную инфо
+  /// (или null при ошибке) — это нужно, чтобы _download() мог передать этот
+  /// же Future в DownloadService и запустить скачивание ПАРАЛЛЕЛЬНО, не
+  /// дожидаясь ответа.
+  Future<VideoInfo?> _fetchInfo() async {
     final url = _urlCtrl.text.trim();
-    if (url.isEmpty) return;
+    if (url.isEmpty) return null;
     setState(() { _fetchingInfo = true; _info = null; _fetchError = ''; });
     try {
       final info = await _api.fetchInfo(url);
-      if (mounted) setState(() {
-        _info = info;
-        _titleCtrl.text = info.title;
-        _selectedQuality = info.qualities.isNotEmpty ? info.qualities.first : 'best';
-        _fetchingInfo = false;
-      });
+      // Пока шёл запрос, поле могли очистить (скачивание успело завершиться)
+      // или вставить другую ссылку — устаревшее инфо в форму не пускаем.
+      if (mounted && _urlCtrl.text.trim() == url) {
+        setState(() {
+          _info = info;
+          _titleCtrl.text = info.title;
+          _selectedQuality = info.qualities.isNotEmpty ? info.qualities.first : 'best';
+          _fetchingInfo = false;
+        });
+      } else if (mounted) {
+        setState(() => _fetchingInfo = false);
+      }
+      return info;
     } catch (e) {
       if (mounted) setState(() { _fetchingInfo = false; _fetchError = '❌ $e'; });
+      return null;
     }
   }
 
@@ -83,14 +95,16 @@ class _DownloadScreenState extends State<DownloadScreen> {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty || DownloadManager.instance.isDownloading) return;
 
-    // Если инфо ещё не получена для этого URL — получаем автоматически,
-    // чтобы не нужно было нажимать две кнопки подряд.
-    if (_info == null) {
-      await _fetchInfo();
-      if (_info == null) return; // фетч не удался — ошибка уже показана
-    }
+    // Если инфо для этого URL ещё нет — запрашиваем её и качаем ОДНОВРЕМЕННО,
+    // а не сначала ждём инфо, потом стартуем скачивание. Два независимых
+    // запроса (каждый честно извлекает данные сам, ничего не переиспользуется
+    // между ними) идут параллельно, поэтому суммарное ожидание — это время
+    // более долгого из них, а не сумма. Инфо подставится в форму, когда
+    // придёт, а в DownloadService дождётся только финального шага (сохранение
+    // обложки/платформы/длительности).
+    final VideoInfo? readyInfo = _info;
+    final Future<VideoInfo?>? infoFuture = readyInfo == null ? _fetchInfo() : null;
 
-    final capturedInfo = _info!;
     final capturedQuality = _selectedQuality ?? 'best';
     final capturedAlbumId = _selectedAlbumId;
     final capturedTitle = _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null;
@@ -102,7 +116,8 @@ class _DownloadScreenState extends State<DownloadScreen> {
       quality: capturedQuality,
       albumId: capturedAlbumId,
       customTitle: capturedTitle,
-      info: capturedInfo,
+      info: readyInfo,
+      infoFuture: infoFuture,
       onDone: (_) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
