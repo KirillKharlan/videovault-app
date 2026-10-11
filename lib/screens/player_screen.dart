@@ -8,6 +8,7 @@ import '../services/download_service.dart';
 import '../services/pip_service.dart';
 import '../services/media_export_service.dart';
 import '../widgets/video_actions_sheet.dart';
+import '../widgets/video_albums_dialog.dart';
 import '../services/playback_manager.dart';
 import '../widgets/safe_bottom_sheet.dart';
 
@@ -582,7 +583,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ),
         ListTile(
           leading: const Icon(Icons.folder_outlined),
-          title: const Text('Move to album'),
+          title: const Text('Альбомы'),
+          subtitle: const Text('Можно выбрать несколько', style: TextStyle(fontSize: 11)),
           onTap: () { Navigator.pop(context); _moveToAlbum(); },
         ),
         ListTile(
@@ -618,29 +620,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _moveToAlbum() async {
-    final albums = await _db.getAlbums();
     final video = _mgr.currentVideo;
     if (!mounted || video == null) return;
-    showSafeModalBottomSheet(
-      context: context,
-      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
-        const Padding(padding: EdgeInsets.all(16),
-            child: Text('Move to album', style: TextStyle(fontWeight: FontWeight.bold))),
-        ListTile(leading: const Icon(Icons.folder_off_outlined), title: const Text('No album'),
-            onTap: () async {
-              await _db.updateVideo(video.copyWith(clearAlbum: true));
-              if (mounted) Navigator.pop(context);
-            }),
-        ...albums.map((a) => ListTile(
-          leading: const Icon(Icons.folder_outlined),
-          title: Text(a.name),
-          onTap: () async {
-            await _db.updateVideo(video.copyWith(albumId: a.id));
-            if (mounted) Navigator.pop(context);
-          },
-        )),
-      ]),
-    );
+    await showVideoAlbumsDialog(context, video);
   }
 
   void _showInfo() {

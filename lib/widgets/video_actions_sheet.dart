@@ -4,6 +4,7 @@ import 'package:cross_file/cross_file.dart';
 import '../models/database.dart';
 import '../services/video_edit_service.dart';
 import 'safe_bottom_sheet.dart';
+import 'video_albums_dialog.dart';
 
 /// Меню действий по долгому нажатию на карточку видео: переименовать,
 /// сменить/сбросить обложку, поделиться файлом. Общее для главного экрана
@@ -39,6 +40,16 @@ Future<void> showVideoActionsSheet(
           await SharePlus.instance.share(
             ShareParams(files: [XFile(video.filePath)], text: video.title),
           );
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.folder_copy_outlined),
+        title: const Text('Альбомы'),
+        subtitle: const Text('Можно добавить в несколько сразу',
+            style: TextStyle(fontSize: 11)),
+        onTap: () async {
+          Navigator.pop(sheetCtx);
+          await showVideoAlbumsDialog(context, video, onChanged: onChanged);
         },
       ),
       ListTile(

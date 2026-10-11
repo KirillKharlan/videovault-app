@@ -236,7 +236,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'videovault.db');
     return openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE albums (
@@ -260,6 +260,14 @@ class AppDatabase {
             letterbox_landscape INTEGER DEFAULT 0,
             last_position_ms INTEGER DEFAULT 0,
             added_at INTEGER NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE album_videos (
+            album_id INTEGER NOT NULL,
+            video_id INTEGER NOT NULL,
+            added_at INTEGER NOT NULL,
+            PRIMARY KEY (album_id, video_id)
           )
         ''');
         await db.execute('''
@@ -296,6 +304,23 @@ class AppDatabase {
           await db.execute(
               'ALTER TABLE videos ADD COLUMN last_position_ms INTEGER DEFAULT 0');
         }
+        if (oldVersion < 5) {
+          // Видео может состоять в нескольких альбомах сразу — связь
+          // "многие ко многим" вместо одной колонки videos.album_id.
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS album_videos (
+              album_id INTEGER NOT NULL,
+              video_id INTEGER NOT NULL,
+              added_at INTEGER NOT NULL,
+              PRIMARY KEY (album_id, video_id)
+            )
+          ''');
+          // Переносим существующие привязки (album_id -> связь).
+          await db.execute('''
+            INSERT OR IGNORE INTO album_videos (album_id, video_id, added_at)
+            SELECT album_id, id, added_at FROM videos WHERE album_id IS NOT NULL
+          ''');
+        }
       },
     );
   }
@@ -323,6 +348,7 @@ class AppDatabase {
 
   Future<void> deleteAlbum(int id) async {
     final d = await db;
+    await d.delete('album_videos', where: 'album_id = ?', whereArgs: [id]);
     await d.delete('albums', where: 'id = ?', whereArgs: [id]);
     DBChangeNotifier.instance.bump();
   }
@@ -337,8 +363,12 @@ class AppDatabase {
 
   Future<List<Video>> getVideosByAlbum(int albumId) async {
     final d = await db;
-    final rows = await d.query('videos',
-        where: 'album_id = ?', whereArgs: [albumId], orderBy: 'added_at DESC');
+    final rows = await d.rawQuery('''
+      SELECT v.* FROM videos v
+      JOIN album_videos av ON av.video_id = v.id
+      WHERE av.album_id = ?
+      ORDER BY v.added_at DESC
+    ''', [albumId]);
     return rows.map(Video.fromMap).toList();
   }
 
@@ -354,6 +384,15 @@ class AppDatabase {
   Future<int> insertVideo(Video video) async {
     final d = await db;
     final id = await d.insert('videos', video.toMap());
+    // Вызывающий код передаёт один albumId (скачивание/импорт) — кладём
+    // его в связь; дальше видео можно добавлять в другие альбомы.
+    if (video.albumId != null) {
+      await d.insert('album_videos', {
+        'album_id': video.albumId,
+        'video_id': id,
+        'added_at': DateTime.now().millisecondsSinceEpoch,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
     DBChangeNotifier.instance.bump();
     return id;
   }
@@ -364,12 +403,49 @@ class AppDatabase {
     DBChangeNotifier.instance.bump();
   }
 
-  /// Массово присвоить альбом нескольким видео разом (для мультивыбора).
+  /// Массово ДОБАВИТЬ видео в альбом (мультивыбор). Видео не "переезжает" —
+  /// остаётся и в других альбомах, где уже состоит. albumId == null убирает
+  /// эти видео из всех альбомов.
   Future<void> setAlbumForVideos(List<int> videoIds, int? albumId) async {
     final d = await db;
     final batch = d.batch();
+    final now = DateTime.now().millisecondsSinceEpoch;
     for (final id in videoIds) {
-      batch.update('videos', {'album_id': albumId}, where: 'id = ?', whereArgs: [id]);
+      if (albumId == null) {
+        batch.delete('album_videos', where: 'video_id = ?', whereArgs: [id]);
+      } else {
+        batch.insert('album_videos',
+            {'album_id': albumId, 'video_id': id, 'added_at': now},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    }
+    await batch.commit(noResult: true);
+    DBChangeNotifier.instance.bump();
+  }
+
+  /// id альбомов, в которых сейчас состоит видео.
+  Future<Set<int>> getAlbumIdsForVideo(int videoId) async {
+    final d = await db;
+    final rows = await d.query('album_videos',
+        columns: ['album_id'], where: 'video_id = ?', whereArgs: [videoId]);
+    return rows.map((r) => r['album_id'] as int).toSet();
+  }
+
+  /// Приводит набор альбомов видео к [albumIds]: лишние связи удаляет,
+  /// недостающие добавляет.
+  Future<void> setVideoAlbums(int videoId, Set<int> albumIds) async {
+    final d = await db;
+    final current = await getAlbumIdsForVideo(videoId);
+    final batch = d.batch();
+    for (final a in current.difference(albumIds)) {
+      batch.delete('album_videos',
+          where: 'album_id = ? AND video_id = ?', whereArgs: [a, videoId]);
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final a in albumIds.difference(current)) {
+      batch.insert('album_videos',
+          {'album_id': a, 'video_id': videoId, 'added_at': now},
+          conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     await batch.commit(noResult: true);
     DBChangeNotifier.instance.bump();
@@ -377,6 +453,7 @@ class AppDatabase {
 
   Future<void> deleteVideo(int id) async {
     final d = await db;
+    await d.delete('album_videos', where: 'video_id = ?', whereArgs: [id]);
     await d.delete('videos', where: 'id = ?', whereArgs: [id]);
     DBChangeNotifier.instance.bump();
   }
