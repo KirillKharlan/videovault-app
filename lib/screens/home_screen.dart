@@ -3,6 +3,8 @@ import '../models/database.dart';
 import '../services/gallery_import_service.dart';
 import '../widgets/video_card.dart';
 import '../widgets/video_actions_sheet.dart';
+import '../widgets/selection_bar.dart';
+import '../services/video_delete_service.dart';
 import 'player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -18,6 +20,50 @@ class _HomeScreenState extends State<HomeScreen> {
   String _search = '';
   bool _loading = true;
   bool _importing = false;
+
+  // ── Режим выбора нескольких видео (для удаления) ─────────────────────
+  bool _selecting = false;
+  final Set<int> _selected = {};
+
+  void _enterSelection(Video v) {
+    setState(() { _selecting = true; _selected..clear()..add(v.id!); });
+  }
+
+  void _exitSelection() {
+    setState(() { _selecting = false; _selected.clear(); });
+  }
+
+  void _toggleSelected(Video v) {
+    setState(() {
+      if (!_selected.remove(v.id)) _selected.add(v.id!);
+      if (_selected.isEmpty) _selecting = false; // снял последнюю — выходим
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    final toDelete = _videos.where((v) => _selected.contains(v.id)).toList();
+    if (toDelete.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text('Удалить ${toDelete.length} видео?'),
+        content: const Text('Файлы будут удалены с устройства безвозвратно, '
+            'видео пропадёт и из всех альбомов.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogCtx, false), child: const Text('Отмена')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Удалить', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await deleteVideosCompletely(toDelete);
+    if (!mounted) return;
+    _exitSelection();
+    _load();
+  }
 
   @override
   void initState() {
@@ -63,12 +109,33 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting) _exitSelection(); // "назад" выходит из выбора
+      },
+      child: Scaffold(
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Header
+            if (_selecting)
+              SelectionBar(
+                count: _selected.length,
+                onClose: _exitSelection,
+                onSelectAll: () => setState(() {
+                  _selected..clear()..addAll(_videos.map((v) => v.id!));
+                }),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    tooltip: 'Удалить выбранные',
+                    onPressed: _selected.isEmpty ? null : _deleteSelected,
+                  ),
+                ],
+              )
+            else
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
               child: Row(children: [
@@ -108,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _buildContent() {
@@ -141,7 +208,10 @@ class _HomeScreenState extends State<HomeScreen> {
         itemCount: _videos.length,
         itemBuilder: (ctx, i) => VideoCard(
           video: _videos[i],
+          selectionMode: _selecting,
+          selected: _selected.contains(_videos[i].id),
           onTap: () async {
+            if (_selecting) { _toggleSelected(_videos[i]); return; }
             await Navigator.push(ctx,
                 MaterialPageRoute(builder: (_) => PlayerScreen(
                   video: _videos[i],
@@ -150,7 +220,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 )));
             _load();
           },
-          onLongPress: () => showVideoActionsSheet(ctx, _videos[i], onChanged: _load),
+          onLongPress: () {
+            if (_selecting) { _toggleSelected(_videos[i]); return; }
+            showVideoActionsSheet(ctx, _videos[i],
+                onChanged: _load, onSelect: () => _enterSelection(_videos[i]));
+          },
         ),
       ),
     );

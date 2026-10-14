@@ -1,3 +1,4 @@
+import '../services/url_utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
@@ -421,6 +422,32 @@ class AppDatabase {
     }
     await batch.commit(noResult: true);
     DBChangeNotifier.instance.bump();
+  }
+
+  /// Убирает видео из ОДНОГО альбома (из общей библиотеки не удаляет).
+  Future<void> removeVideosFromAlbum(List<int> videoIds, int albumId) async {
+    final d = await db;
+    final batch = d.batch();
+    for (final id in videoIds) {
+      batch.delete('album_videos',
+          where: 'album_id = ? AND video_id = ?', whereArgs: [albumId, id]);
+    }
+    await batch.commit(noResult: true);
+    DBChangeNotifier.instance.bump();
+  }
+
+  /// Уже скачанное/сохранённое видео с той же исходной ссылкой (сравнение по
+  /// нормализованной ссылке, чтобы youtu.be/…?si=… и watch?v=… считались одним
+  /// и тем же видео). null — такого ещё нет.
+  Future<Video?> findVideoBySourceUrl(String url) async {
+    final key = normalizeVideoUrl(url);
+    final d = await db;
+    final rows = await d.query('videos', where: 'source_url IS NOT NULL');
+    for (final r in rows) {
+      final src = r['source_url'] as String?;
+      if (src != null && normalizeVideoUrl(src) == key) return Video.fromMap(r);
+    }
+    return null;
   }
 
   /// id альбомов, в которых сейчас состоит видео.

@@ -95,6 +95,30 @@ class _DownloadScreenState extends State<DownloadScreen> {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty || DownloadManager.instance.isDownloading) return;
 
+    // Это видео уже есть в библиотеке? Предупреждаем до того, как тратить
+    // трафик/прокси на повторное скачивание той же самой копии.
+    final existing = await _db.findVideoBySourceUrl(url);
+    if (existing != null && mounted) {
+      final again = await showDialog<bool>(
+        context: context,
+        builder: (dialogCtx) => AlertDialog(
+          title: const Text('Уже в библиотеке'),
+          content: Text('Это видео уже скачано:\n«${existing.title}»\n\nСкачать ещё одну копию?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx, false),
+              child: const Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx, true),
+              child: const Text('Скачать ещё раз'),
+            ),
+          ],
+        ),
+      );
+      if (again != true) return;
+    }
+
     // Если инфо для этого URL ещё нет — запрашиваем её и качаем ОДНОВРЕМЕННО,
     // а не сначала ждём инфо, потом стартуем скачивание. Два независимых
     // запроса (каждый честно извлекает данные сам, ничего не переиспользуется

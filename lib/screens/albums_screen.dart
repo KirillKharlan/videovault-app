@@ -3,6 +3,8 @@ import '../models/database.dart';
 import '../widgets/safe_bottom_sheet.dart';
 import '../widgets/video_card.dart';
 import '../widgets/video_actions_sheet.dart';
+import '../widgets/selection_bar.dart';
+import '../services/video_delete_service.dart';
 import 'album_video_picker_screen.dart';
 import 'player_screen.dart';
 
@@ -179,6 +181,66 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   final _db = AppDatabase();
   List<Video> _videos = [];
 
+  // ── Режим выбора нескольких видео ────────────────────────────────────
+  bool _selecting = false;
+  final Set<int> _selected = {};
+
+  void _enterSelection(Video v) {
+    setState(() { _selecting = true; _selected..clear()..add(v.id!); });
+  }
+
+  void _exitSelection() {
+    setState(() { _selecting = false; _selected.clear(); });
+  }
+
+  void _toggleSelected(Video v) {
+    setState(() {
+      if (!_selected.remove(v.id)) _selected.add(v.id!);
+      if (_selected.isEmpty) _selecting = false;
+    });
+  }
+
+  List<Video> get _selectedVideos =>
+      _videos.where((v) => _selected.contains(v.id)).toList();
+
+  /// Убрать выбранные только из ЭТОГО альбома — в общей библиотеке и в
+  /// других альбомах они остаются.
+  Future<void> _removeSelectedFromAlbum() async {
+    final ids = _selectedVideos.map((v) => v.id!).toList();
+    if (ids.isEmpty) return;
+    await _db.removeVideosFromAlbum(ids, widget.album.id!);
+    if (!mounted) return;
+    _exitSelection();
+    _load();
+  }
+
+  /// Удалить выбранные совсем: файлы, обложки, из всех альбомов.
+  Future<void> _deleteSelected() async {
+    final toDelete = _selectedVideos;
+    if (toDelete.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text('Удалить ${toDelete.length} видео?'),
+        content: const Text('Файлы будут удалены с устройства безвозвратно, '
+            'видео пропадёт и из всех альбомов. Чтобы убрать только из этого '
+            'альбома — выберите «Убрать из альбома».'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogCtx, false), child: const Text('Отмена')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Удалить', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await deleteVideosCompletely(toDelete);
+    if (!mounted) return;
+    _exitSelection();
+    _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -210,17 +272,46 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.album.name),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            tooltip: 'Add videos',
-            onPressed: _addVideos,
-          ),
-        ],
-      ),
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting) _exitSelection();
+      },
+      child: Scaffold(
+      appBar: _selecting
+          ? AppBar(
+              automaticallyImplyLeading: false,
+              titleSpacing: 0,
+              title: SelectionBar(
+                count: _selected.length,
+                onClose: _exitSelection,
+                onSelectAll: () => setState(() {
+                  _selected..clear()..addAll(_videos.map((v) => v.id!));
+                }),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.folder_off_outlined),
+                    tooltip: 'Убрать из альбома',
+                    onPressed: _removeSelectedFromAlbum,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    tooltip: 'Удалить совсем',
+                    onPressed: _deleteSelected,
+                  ),
+                ],
+              ),
+            )
+          : AppBar(
+              title: Text(widget.album.name),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline),
+                  tooltip: 'Add videos',
+                  onPressed: _addVideos,
+                ),
+              ],
+            ),
       body: SafeArea(
         top: false,
         child: _videos.isEmpty
@@ -245,7 +336,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               itemCount: _videos.length,
               itemBuilder: (ctx, i) => VideoCard(
                 video: _videos[i],
+                selectionMode: _selecting,
+                selected: _selected.contains(_videos[i].id),
                 onTap: () async {
+                  if (_selecting) { _toggleSelected(_videos[i]); return; }
                   await Navigator.push(ctx,
                       MaterialPageRoute(builder: (_) => PlayerScreen(
                         video: _videos[i],
@@ -254,13 +348,17 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       )));
                   _load();
                 },
-                onLongPress: () => showVideoActionsSheet(ctx, _videos[i], onChanged: _load),
+                onLongPress: () {
+                  if (_selecting) { _toggleSelected(_videos[i]); return; }
+                  showVideoActionsSheet(ctx, _videos[i],
+                      onChanged: _load, onSelect: () => _enterSelection(_videos[i]));
+                },
               ),
             ),
       ),
-      floatingActionButton: _videos.isNotEmpty
+      floatingActionButton: (_videos.isNotEmpty && !_selecting)
           ? FloatingActionButton(onPressed: _addVideos, child: const Icon(Icons.add))
           : null,
-    );
+    ));
   }
 }

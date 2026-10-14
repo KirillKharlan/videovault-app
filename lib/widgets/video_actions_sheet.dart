@@ -13,6 +13,7 @@ Future<void> showVideoActionsSheet(
   BuildContext context,
   Video video, {
   required VoidCallback onChanged,
+  VoidCallback? onSelect, // если задан — в меню появляется пункт "Выбрать"
 }) {
   final editor = VideoEditService();
 
@@ -25,6 +26,17 @@ Future<void> showVideoActionsSheet(
             maxLines: 1, overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 14, color: Colors.white54)),
       ),
+      if (onSelect != null)
+        ListTile(
+          leading: const Icon(Icons.checklist_rtl),
+          title: const Text('Выбрать'),
+          subtitle: const Text('Отметить несколько видео, например чтобы удалить',
+              style: TextStyle(fontSize: 11)),
+          onTap: () {
+            Navigator.pop(sheetCtx);
+            onSelect();
+          },
+        ),
       ListTile(
         leading: const Icon(Icons.share_outlined),
         title: const Text('Поделиться видео'),
