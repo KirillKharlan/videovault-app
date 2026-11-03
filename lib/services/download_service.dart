@@ -74,6 +74,7 @@ class DownloadService {
     required String url,
     required String quality,
     int? albumId,
+    int? Function()? albumIdResolver,
     String? customTitle,
     VideoInfo? info,
     Future<VideoInfo?>? infoFuture,
@@ -87,6 +88,7 @@ class DownloadService {
     try {
       return await _doDownload(
         url: url, quality: quality, albumId: albumId,
+        albumIdResolver: albumIdResolver,
         customTitle: customTitle, info: info, infoFuture: infoFuture,
         onProgress: onProgress,
       );
@@ -99,6 +101,7 @@ class DownloadService {
     required String url,
     required String quality,
     int? albumId,
+    int? Function()? albumIdResolver,
     String? customTitle,
     VideoInfo? info,
     Future<VideoInfo?>? infoFuture,
@@ -237,7 +240,9 @@ class DownloadService {
       platform: resolvedInfo?.platform,
       duration: resolvedInfo?.duration ?? 0,
       fileSize: fileSize,
-      albumId: albumId,
+      // Альбом выбирают и меняют в очереди прямо во время скачивания —
+      // берём актуальное значение на момент сохранения, а не на старте.
+      albumId: albumIdResolver != null ? albumIdResolver() : albumId,
     );
 
     final id = await _db.insertVideo(video);

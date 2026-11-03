@@ -144,6 +144,37 @@ class Video {
   }
 }
 
+/// Участок видео, который плеер проматывает сам (реклама, заставка, пауза).
+/// Привязан к видео, а не к диапазону повтора: работает и без диапазона, а
+/// когда диапазон есть — пропуск внутри него просто срабатывает при каждом
+/// проходе.
+class SkipSegment {
+  final int? id;
+  final int videoId;
+  final int startMs;
+  final int endMs;
+
+  SkipSegment({this.id, required this.videoId, required this.startMs, required this.endMs});
+
+  Duration get start => Duration(milliseconds: startMs);
+  Duration get end => Duration(milliseconds: endMs);
+  Duration get length => Duration(milliseconds: endMs - startMs);
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'video_id': videoId,
+        'start_ms': startMs,
+        'end_ms': endMs,
+      };
+
+  factory SkipSegment.fromMap(Map<String, dynamic> m) => SkipSegment(
+        id: m['id'],
+        videoId: m['video_id'],
+        startMs: m['start_ms'],
+        endMs: m['end_ms'],
+      );
+}
+
 class RepeatRange {
   final int? id;
   final int videoId;
@@ -237,7 +268,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'videovault.db');
     return openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE albums (
@@ -261,6 +292,14 @@ class AppDatabase {
             letterbox_landscape INTEGER DEFAULT 0,
             last_position_ms INTEGER DEFAULT 0,
             added_at INTEGER NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE video_skips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL,
+            start_ms INTEGER NOT NULL,
+            end_ms INTEGER NOT NULL
           )
         ''');
         await db.execute('''
@@ -320,6 +359,16 @@ class AppDatabase {
           await db.execute('''
             INSERT OR IGNORE INTO album_videos (album_id, video_id, added_at)
             SELECT album_id, id, added_at FROM videos WHERE album_id IS NOT NULL
+          ''');
+        }
+        if (oldVersion < 6) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS video_skips (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              video_id INTEGER NOT NULL,
+              start_ms INTEGER NOT NULL,
+              end_ms INTEGER NOT NULL
+            )
           ''');
         }
       },
@@ -481,6 +530,8 @@ class AppDatabase {
   Future<void> deleteVideo(int id) async {
     final d = await db;
     await d.delete('album_videos', where: 'video_id = ?', whereArgs: [id]);
+    await d.delete('video_skips', where: 'video_id = ?', whereArgs: [id]);
+    await d.delete('repeat_ranges', where: 'video_id = ?', whereArgs: [id]);
     await d.delete('videos', where: 'id = ?', whereArgs: [id]);
     DBChangeNotifier.instance.bump();
   }
@@ -534,6 +585,27 @@ class AppDatabase {
     final rows = await d.query('repeat_ranges',
         where: 'video_id = ?', whereArgs: [videoId], orderBy: 'id ASC');
     return rows.map(RepeatRange.fromMap).toList();
+  }
+
+  // ── Пропуски (реклама и т.п.) ──────────────────────────────────────────
+  // Без DBChangeNotifier.bump(): списки видео от пропусков не меняются.
+
+  Future<List<SkipSegment>> getSkipsForVideo(int videoId) async {
+    final d = await db;
+    final rows = await d.query('video_skips',
+        where: 'video_id = ?', whereArgs: [videoId], orderBy: 'start_ms ASC');
+    return rows.map(SkipSegment.fromMap).toList();
+  }
+
+  Future<int> createSkip(SkipSegment skip) async {
+    final d = await db;
+    final map = skip.toMap()..remove('id');
+    return d.insert('video_skips', map);
+  }
+
+  Future<void> deleteSkip(int id) async {
+    final d = await db;
+    await d.delete('video_skips', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<RepeatRange?> getDefaultRange(int videoId) async {

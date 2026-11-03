@@ -354,6 +354,142 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await PipService.instance.enterPip(aspectRatio: aspect);
   }
 
+  /// "м:сс", "ч:мм:сс" или просто секунды -> Duration; null, если не разобрать.
+  Duration? _parseTime(String raw) {
+    final parts = raw.trim().split(':');
+    if (parts.isEmpty || parts.length > 3) return null;
+    final nums = <int>[];
+    for (final p in parts) {
+      final n = int.tryParse(p.trim());
+      if (n == null || n < 0) return null;
+      nums.add(n);
+    }
+    var seconds = 0;
+    for (final n in nums) {
+      seconds = seconds * 60 + n;
+    }
+    return Duration(seconds: seconds);
+  }
+
+  Future<void> _finishMarkingSkip() async {
+    final start = _mgr.pendingSkipStart;
+    final pos = _mgr.controller?.value.position;
+    if (start == null || pos == null) return;
+    // Если ушли назад от отмеченного начала — просто меняем границы местами.
+    final a = start < pos ? start : pos;
+    final b = start < pos ? pos : start;
+    final error = await _mgr.addSkip(a, b);
+    _mgr.cancelMarkingSkip();
+    _showSnack(error ?? 'Пропуск ${_fmt(a)} — ${_fmt(b)} добавлен', isError: error != null);
+  }
+
+  void _showSkipsSheet() {
+    showSafeModalBottomSheet(
+      context: context,
+      builder: (sheetCtx) => ListenableBuilder(
+        listenable: _mgr,
+        builder: (ctx, _) => Column(mainAxisSize: MainAxisSize.min, children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text('Пропуски', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              'Участки, которые плеер проматывает сам — например, рекламу или '
+              'заставку. Работают и с диапазоном повтора, и без него.',
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+          ),
+          SwitchListTile(
+            title: const Text('Пропускать автоматически'),
+            subtitle: const Text('Можно выключить на время, не удаляя пропуски',
+                style: TextStyle(fontSize: 11)),
+            value: _mgr.skipsEnabled,
+            onChanged: _mgr.setSkipsEnabled,
+          ),
+          if (_mgr.skips.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Пропусков пока нет', style: TextStyle(color: Colors.white38)),
+            ),
+          ..._mgr.skips.map((s) => ListTile(
+                leading: const Icon(Icons.skip_next),
+                title: Text('${_fmt(s.start)} — ${_fmt(s.end)}'),
+                subtitle: Text('${s.length.inSeconds} с', style: const TextStyle(fontSize: 11)),
+                onTap: () {
+                  // Показать место: перематываем чуть ДО пропуска, не внутрь него.
+                  final back = s.start - const Duration(seconds: 3);
+                  _mgr.controller?.seekTo(back < Duration.zero ? Duration.zero : back);
+                  Navigator.pop(sheetCtx);
+                },
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  onPressed: () => _mgr.removeSkip(s),
+                ),
+              )),
+          const Divider(height: 1, color: Color(0xFF2A2A38)),
+          ListTile(
+            leading: const Icon(Icons.add_circle_outline),
+            title: const Text('Отметить пропуск на видео'),
+            subtitle: const Text('Начало — текущая позиция, потом найдите конец',
+                style: TextStyle(fontSize: 11)),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _mgr.startMarkingSkip();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.edit_outlined),
+            title: const Text('Ввести время вручную'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _showManualSkipDialog();
+            },
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _showManualSkipDialog() async {
+    final startCtrl = TextEditingController();
+    final endCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Новый пропуск'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: startCtrl,
+            autofocus: true,
+            keyboardType: TextInputType.datetime,
+            decoration: const InputDecoration(labelText: 'Начало (м:сс)', hintText: '1:30'),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: endCtrl,
+            keyboardType: TextInputType.datetime,
+            decoration: const InputDecoration(labelText: 'Конец (м:сс)', hintText: '2:05'),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogCtx, false), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(dialogCtx, true), child: const Text('Добавить')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final start = _parseTime(startCtrl.text);
+    final end = _parseTime(endCtrl.text);
+    if (start == null || end == null) {
+      _showSnack('Не удалось разобрать время — формат м:сс, например 1:30', isError: true);
+      return;
+    }
+    final error = await _mgr.addSkip(start, end);
+    _showSnack(error ?? 'Пропуск ${_fmt(start)} — ${_fmt(end)} добавлен', isError: error != null);
+  }
+
   void _showSleepTimerPicker() {
     const presets = [15, 30, 45, 60];
     showSafeModalBottomSheet(
@@ -570,6 +706,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
           subtitle: const Text('Работает даже при полном закрытии приложения',
               style: TextStyle(fontSize: 11)),
           onTap: () { Navigator.pop(context); _enableBackgroundAudio(); },
+        ),
+        ListTile(
+          leading: const Icon(Icons.content_cut),
+          title: Text(_mgr.skips.isEmpty
+              ? 'Пропуски (реклама)'
+              : 'Пропуски: ${_mgr.skips.length}'),
+          subtitle: const Text('Участки, которые плеер проматывает сам',
+              style: TextStyle(fontSize: 11)),
+          onTap: () { Navigator.pop(context); _showSkipsSheet(); },
         ),
         ListTile(
           leading: Icon(_mgr.sleepTimerRemaining != null
@@ -801,6 +946,55 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   child: const Text('Диапазоны', style: TextStyle(fontSize: 12)),
                 ),
               ]),
+            ),
+
+          // Панель разметки пропуска: начало уже отмечено, ищем конец.
+          if (_mgr.pendingSkipStart != null)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E2A),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF7C5CFC)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.content_cut, size: 16, color: Color(0xFF7C5CFC)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Пропуск с ${_fmt(_mgr.pendingSkipStart!)} — найдите конец',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                ),
+                TextButton(
+                  onPressed: _finishMarkingSkip,
+                  child: const Text('Конец здесь', style: TextStyle(fontSize: 12)),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close, size: 18, color: Colors.white54),
+                  onPressed: _mgr.cancelMarkingSkip,
+                ),
+              ]),
+            ),
+
+          // Индикатор пропусков (если они есть у этого видео)
+          if (_mgr.skips.isNotEmpty && _mgr.pendingSkipStart == null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: InkWell(
+                onTap: _showSkipsSheet,
+                child: Row(children: [
+                  Icon(Icons.content_cut, size: 14,
+                      color: _mgr.skipsEnabled ? const Color(0xFF7C5CFC) : Colors.white24),
+                  const SizedBox(width: 6),
+                  Text(
+                    _mgr.skipsEnabled
+                        ? 'Пропусков: ${_mgr.skips.length}'
+                        : 'Пропуски выключены (${_mgr.skips.length})',
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ]),
+              ),
             ),
 
           // Видимый отсчёт таймера сна — виден постоянно, пока активен, не

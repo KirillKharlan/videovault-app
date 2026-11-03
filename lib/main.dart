@@ -4,6 +4,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'screens/home_screen.dart';
 import 'screens/albums_screen.dart';
 import 'screens/download_screen.dart';
+import 'screens/download_queue_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/download_manager.dart';
 import 'services/settings_service.dart';
@@ -138,79 +139,112 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  // Страницы IndexedStack фиксированы: 0 Videos, 1 Albums, 2 Download,
+  // 3 Queue, 4 Settings. Вкладка "Queue" в нижнем меню видна, только когда
+  // в очереди 2+ загрузок (DownloadManager.showQueueTab) — тогда индексы
+  // меню и страниц совпадают, иначе всё после Download сдвигается на единицу.
+  static const _queuePage = 3;
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Column(
-        children: [
-          Expanded(
-            child: IndexedStack(
-              index: _index,
-              children: [
-                const HomeScreen(),
-                const AlbumsScreen(),
-                DownloadScreen(
-                  initialUrl: _sharedUrl,
-                  onUrlConsumed: () => setState(() => _sharedUrl = null),
+    return ListenableBuilder(
+      listenable: DownloadManager.instance,
+      builder: (context, _) {
+        final mgr = DownloadManager.instance;
+        final queueVisible = mgr.showQueueTab;
+
+        // Вкладка очереди пропала, пока мы на ней — переходим на Download.
+        if (!queueVisible && _index == _queuePage) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _index == _queuePage) setState(() => _index = 2);
+          });
+        }
+        final page = (!queueVisible && _index == _queuePage) ? 2 : _index;
+        int toDisplay(int real) => queueVisible ? real : (real > _queuePage ? real - 1 : real);
+        int toReal(int display) => queueVisible ? display : (display >= _queuePage ? display + 1 : display);
+
+        return Scaffold(
+          body: Column(
+            children: [
+              Expanded(
+                child: IndexedStack(
+                  index: page,
+                  children: [
+                    const HomeScreen(),
+                    const AlbumsScreen(),
+                    DownloadScreen(
+                      initialUrl: _sharedUrl,
+                      onUrlConsumed: () => setState(() => _sharedUrl = null),
+                    ),
+                    const DownloadQueueScreen(),
+                    const SettingsScreen(),
+                  ],
                 ),
-                const SettingsScreen(),
-              ],
-            ),
-          ),
-          // Видна с любой вкладки, пока идёт скачивание — не нужно
-          // возвращаться на вкладку "Download", чтобы понять, жива ли
-          // загрузка ещё. Тап переносит на вкладку загрузки.
-          ListenableBuilder(
-            listenable: DownloadManager.instance,
-            builder: (context, _) {
-              final mgr = DownloadManager.instance;
-              if (!mgr.isDownloading) return const SizedBox.shrink();
-              return InkWell(
-                onTap: () => setState(() => _index = 2),
-                child: Container(
-                  color: const Color(0xFF16161E),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(children: [
-                    SizedBox(
-                      width: 18, height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2, value: mgr.progress > 0 ? mgr.progress : null,
+              ),
+              // Видна с любой вкладки, пока идёт скачивание — не нужно
+              // возвращаться на вкладку "Download", чтобы понять, жива ли
+              // загрузка ещё. Тап ведёт в очередь (если она есть), иначе на
+              // вкладку загрузки.
+              if (mgr.isDownloading)
+                InkWell(
+                  onTap: () => setState(() => _index = queueVisible ? _queuePage : 2),
+                  child: Container(
+                    color: const Color(0xFF16161E),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(children: [
+                      SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2, value: mgr.progress > 0 ? mgr.progress : null,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(mgr.title ?? 'Загрузка…',
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(mgr.title ?? 'Загрузка…',
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white, fontSize: 13)),
+                          Text(
+                            mgr.pendingCount > 1
+                                ? '${mgr.statusText} · в очереди ещё ${mgr.pendingCount - 1}'
+                                : mgr.statusText,
                             maxLines: 1, overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white, fontSize: 13)),
-                        Text(mgr.statusText,
-                            maxLines: 1, overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                      ]),
-                    ),
-                    Text('${(mgr.progress * 100).toInt()}%',
-                        style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                  ]),
+                            style: const TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                        ]),
+                      ),
+                      Text('${(mgr.progress * 100).toInt()}%',
+                          style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    ]),
+                  ),
                 ),
-              );
-            },
+            ],
           ),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.video_library_outlined),
-              selectedIcon: Icon(Icons.video_library), label: 'Videos'),
-          NavigationDestination(icon: Icon(Icons.folder_outlined),
-              selectedIcon: Icon(Icons.folder), label: 'Albums'),
-          NavigationDestination(icon: Icon(Icons.download_outlined),
-              selectedIcon: Icon(Icons.download), label: 'Download'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings), label: 'Settings'),
-        ],
-      ),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: toDisplay(page),
+            onDestinationSelected: (d) => setState(() => _index = toReal(d)),
+            destinations: [
+              const NavigationDestination(icon: Icon(Icons.video_library_outlined),
+                  selectedIcon: Icon(Icons.video_library), label: 'Videos'),
+              const NavigationDestination(icon: Icon(Icons.folder_outlined),
+                  selectedIcon: Icon(Icons.folder), label: 'Albums'),
+              const NavigationDestination(icon: Icon(Icons.download_outlined),
+                  selectedIcon: Icon(Icons.download), label: 'Download'),
+              if (queueVisible)
+                NavigationDestination(
+                  icon: Badge(
+                    label: Text('${mgr.pendingCount}'),
+                    isLabelVisible: mgr.pendingCount > 0,
+                    child: const Icon(Icons.format_list_numbered),
+                  ),
+                  label: 'Queue',
+                ),
+              const NavigationDestination(icon: Icon(Icons.settings_outlined),
+                  selectedIcon: Icon(Icons.settings), label: 'Settings'),
+            ],
+          ),
+        );
+      },
     );
   }
 }

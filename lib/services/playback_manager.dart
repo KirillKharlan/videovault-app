@@ -72,6 +72,18 @@ class PlaybackManager extends ChangeNotifier {
   /// заново перемотать (по умолчанию уже применён диапазон при загрузке).
   ResumeChoice? pendingResumeChoice;
 
+  // ── Пропуски (реклама, заставки) ───────────────────────────────────────
+  /// Участки текущего видео, которые проматываются автоматически. Работают
+  /// и с диапазоном повтора, и без него.
+  List<SkipSegment> skips = [];
+  /// Общий выключатель на время сессии: можно временно посмотреть всё как
+  /// есть, не удаляя пропуски.
+  bool skipsEnabled = true;
+  /// Начало пропуска, которое уже отметили, но конец ещё нет (плеер в этот
+  /// момент показывает панель "Конец здесь").
+  Duration? pendingSkipStart;
+  DateTime? _lastSkipAt;
+
   // ── Таймер сна ───────────────────────────────────────────────────────
   Duration? sleepTimerRemaining;
   Timer? _sleepTimer;
@@ -116,6 +128,9 @@ class PlaybackManager extends ChangeNotifier {
     controller!.addListener(_onTick);
 
     activeRange = await _db.getDefaultRange(video.id!);
+    skips = await _db.getSkipsForVideo(video.id!);
+    pendingSkipStart = null;
+    _lastSkipAt = null;
     adhocLoop = false;
     adhocStart = null;
     adhocEnd = null;
@@ -172,6 +187,13 @@ class PlaybackManager extends ChangeNotifier {
     final pos = ctrl.value.position;
     final dur = ctrl.value.duration;
 
+    // Пропуск обрабатываем ДО логики диапазона/конца видео: если сейчас
+    // перемотали, остальное в этот тик не нужно — позиция уже другая.
+    if (_applySkips(ctrl, pos, dur)) {
+      notifyListeners();
+      return;
+    }
+
     if (isLoopActive) {
       final end = effectiveEnd == Duration.zero ? dur : effectiveEnd;
       if (pos >= end - const Duration(milliseconds: 150)) {
@@ -215,6 +237,90 @@ class PlaybackManager extends ChangeNotifier {
     _syncWakelock();
     _syncPipState();
     _maybeSavePosition(pos, dur);
+  }
+
+  /// Если позиция попала в пропуск — перематывает на его конец. Возвращает
+  /// true, если перемотка была. Соседние/пересекающиеся пропуски склеиваются
+  /// (перематываем сразу за последний из цепочки).
+  bool _applySkips(VideoPlayerController ctrl, Duration pos, Duration dur) {
+    if (!skipsEnabled || skips.isEmpty) return false;
+    // Пауза после прошлого пропуска — чтобы не зациклиться, пока перемотка
+    // ещё не отразилась в position.
+    final now = DateTime.now();
+    if (_lastSkipAt != null &&
+        now.difference(_lastSkipAt!) < const Duration(milliseconds: 800)) {
+      return false;
+    }
+    Duration? target;
+    for (final s in skips) {
+      if (pos >= s.start && pos < s.end && (target == null || s.end > target)) {
+        target = s.end;
+      }
+    }
+    if (target == null) return false;
+    var extended = true;
+    while (extended) {
+      extended = false;
+      for (final s in skips) {
+        if (target! >= s.start && target < s.end) {
+          target = s.end;
+          extended = true;
+        }
+      }
+    }
+    _lastSkipAt = now;
+    final Duration to = target!;
+    // Пропуск до самого конца — не уходим за длительность, иначе плеер
+    // может не отработать завершение видео штатно.
+    final safeEnd = dur - const Duration(milliseconds: 200);
+    ctrl.seekTo(to >= dur && safeEnd > Duration.zero ? safeEnd : to);
+    return true;
+  }
+
+  /// Добавляет пропуск [start]–[end]. Возвращает текст ошибки или null, если
+  /// всё сохранено.
+  Future<String?> addSkip(Duration start, Duration end) async {
+    final video = currentVideo;
+    final ctrl = controller;
+    if (video?.id == null || ctrl == null) return 'Видео не загружено';
+    final dur = ctrl.value.duration;
+    final clampedEnd = end > dur ? dur : end;
+    if (clampedEnd - start < const Duration(milliseconds: 500)) {
+      return 'Пропуск слишком короткий — конец должен быть позже начала';
+    }
+    await _db.createSkip(SkipSegment(
+      videoId: video!.id!,
+      startMs: start.inMilliseconds,
+      endMs: clampedEnd.inMilliseconds,
+    ));
+    skips = await _db.getSkipsForVideo(video.id!);
+    notifyListeners();
+    return null;
+  }
+
+  Future<void> removeSkip(SkipSegment skip) async {
+    final video = currentVideo;
+    if (skip.id == null || video?.id == null) return;
+    await _db.deleteSkip(skip.id!);
+    skips = await _db.getSkipsForVideo(video!.id!);
+    notifyListeners();
+  }
+
+  void setSkipsEnabled(bool enabled) {
+    skipsEnabled = enabled;
+    notifyListeners();
+  }
+
+  void startMarkingSkip() {
+    final ctrl = controller;
+    if (ctrl == null) return;
+    pendingSkipStart = ctrl.value.position;
+    notifyListeners();
+  }
+
+  void cancelMarkingSkip() {
+    pendingSkipStart = null;
+    notifyListeners();
   }
 
   /// Сохраняет позицию не чаще раза в 5 секунд — на каждый тик было бы
@@ -413,6 +519,8 @@ class PlaybackManager extends ChangeNotifier {
       }
     }
     cancelSleepTimer();
+    skips = [];
+    pendingSkipStart = null;
     controller?.removeListener(_onTick);
     chewieController?.dispose();
     await controller?.dispose();

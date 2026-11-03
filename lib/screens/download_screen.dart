@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../api/api_client.dart';
@@ -81,19 +80,15 @@ class _DownloadScreenState extends State<DownloadScreen> {
     }
   }
 
-  /// Запускает загрузку через глобальный DownloadManager и СРАЗУ отпускает
-  /// экран — не ждёт завершения. Можно сразу уйти с этого экрана (сменить
-  /// вкладку, открыть плеер) — прогресс продолжит отслеживаться в фоне и
-  /// будет виден на полоске прогресса в MainScreen.
-  ///
-  /// Форма (ссылка, инфо, настройки) НЕ очищается при старте — остаётся на
-  /// экране вместе с прогрессом, а не прячется за отдельным видом. При
-  /// неудаче тоже остаётся как есть, плюс показывается инлайн-ошибка — так
-  /// видно, что именно не скачалось, и можно повторить тем же нажатием.
-  /// Очищаем форму только при успешном завершении.
+  /// Ставит загрузку в очередь DownloadManager и СРАЗУ освобождает форму:
+  /// поле ссылки, превью и название очищаются, можно вставлять следующую
+  /// ссылку, не дожидаясь конца этой. Альбом остаётся выбранным (удобно
+  /// пачкой качать в один альбом); у каждой загрузки в очереди его можно
+  /// поменять отдельно. Ошибка попадает и в очередь (если там есть кого
+  /// сравнить), и сюда — текстом под формой.
   Future<void> _download() async {
     final url = _urlCtrl.text.trim();
-    if (url.isEmpty || DownloadManager.instance.isDownloading) return;
+    if (url.isEmpty) return;
 
     // Это видео уже есть в библиотеке? Предупреждаем до того, как тратить
     // трафик/прокси на повторное скачивание той же самой копии.
@@ -119,48 +114,46 @@ class _DownloadScreenState extends State<DownloadScreen> {
       if (again != true) return;
     }
 
-    // Если инфо для этого URL ещё нет — запрашиваем её и качаем ОДНОВРЕМЕННО,
-    // а не сначала ждём инфо, потом стартуем скачивание. Два независимых
-    // запроса (каждый честно извлекает данные сам, ничего не переиспользуется
-    // между ними) идут параллельно, поэтому суммарное ожидание — это время
-    // более долгого из них, а не сумма. Инфо подставится в форму, когда
-    // придёт, а в DownloadService дождётся только финального шага (сохранение
-    // обложки/платформы/длительности).
+    // Инфо о видео: уже получена (кнопкой "Получить информацию") — берём её,
+    // нет — запрашиваем ПАРАЛЛЕЛЬНО со скачиванием, не дожидаясь. Запрос
+    // идёт отдельно от формы, чтобы не блокировать её для следующей ссылки.
     final VideoInfo? readyInfo = _info;
-    final Future<VideoInfo?>? infoFuture = readyInfo == null ? _fetchInfo() : null;
+    final Future<VideoInfo?>? infoFuture = readyInfo == null
+        ? _api.fetchInfo(url).then<VideoInfo?>((i) => i).catchError((_) => null)
+        : null;
 
-    final capturedQuality = _selectedQuality ?? 'best';
-    final capturedAlbumId = _selectedAlbumId;
-    final capturedTitle = _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null;
+    final quality = _selectedQuality ?? 'best';
+    final title = _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null;
 
-    setState(() { _downloadError = ''; });
-
-    unawaited(DownloadManager.instance.startDownload(
+    DownloadManager.instance.enqueue(
       url: url,
-      quality: capturedQuality,
-      albumId: capturedAlbumId,
-      customTitle: capturedTitle,
+      quality: quality,
+      albumId: _selectedAlbumId,
+      albumName: _selectedAlbumName,
+      customTitle: title,
       info: readyInfo,
       infoFuture: infoFuture,
-      onDone: (_) {
+      onDone: (video) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('✅ Видео сохранено!')));
-        setState(() {
-          _info = null;
-          _downloadError = '';
-        });
-        _urlCtrl.clear();
-        _titleCtrl.clear();
-        _selectedQuality = null;
+            SnackBar(content: Text('✅ Сохранено: ${video.title}')));
       },
       onError: (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('❌ $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ $e')));
         setState(() { _downloadError = '$e'; });
       },
-    ));
+    );
+
+    // Форма свободна для следующей ссылки сразу, не после завершения.
+    setState(() {
+      _info = null;
+      _fetchError = '';
+      _downloadError = '';
+      _selectedQuality = null;
+    });
+    _urlCtrl.clear();
+    _titleCtrl.clear();
   }
 
   @override
@@ -285,6 +278,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
             // подменяет собой остальной экран.
             if (mgr.isDownloading) ...[
               const SizedBox(height: 20),
+              Text(mgr.title ?? 'Загрузка…',
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 13)),
+              const SizedBox(height: 6),
               LinearProgressIndicator(
                 value: mgr.progress > 0 ? mgr.progress : null,
                 backgroundColor: const Color(0xFF1E1E2A),
@@ -292,6 +289,12 @@ class _DownloadScreenState extends State<DownloadScreen> {
               ),
               const SizedBox(height: 8),
               Text(mgr.statusText, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+              if (mgr.pendingCount > 1)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text('В очереди ещё: ${mgr.pendingCount - 1}',
+                      style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                ),
             ],
 
             if (_fetchError.isNotEmpty)
@@ -312,14 +315,14 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: (_fetchingInfo || mgr.isDownloading) ? null : _download,
-              icon: (_fetchingInfo || mgr.isDownloading)
+              onPressed: _fetchingInfo ? null : _download,
+              icon: _fetchingInfo
                   ? const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.download),
               label: Text(_fetchingInfo
                   ? 'Получение информации…'
-                  : (mgr.isDownloading ? 'Скачивается…' : 'Скачать')),
+                  : (mgr.isDownloading ? 'Добавить в очередь' : 'Скачать')),
             ),
           ]),
         ),
