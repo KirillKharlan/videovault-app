@@ -9,7 +9,10 @@ import 'album_video_picker_screen.dart';
 import 'player_screen.dart';
 
 class AlbumsScreen extends StatefulWidget {
-  const AlbumsScreen({super.key});
+  /// Открыть альбом во вкладке главного экрана (см. main.dart). Если не задан —
+  /// альбом открывается отдельным экраном поверх (как раньше).
+  final void Function(Album album)? onOpenAlbum;
+  const AlbumsScreen({super.key, this.onOpenAlbum});
   @override
   State<AlbumsScreen> createState() => _AlbumsScreenState();
 }
@@ -67,8 +70,15 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
                   itemCount: _albums.length,
                   itemBuilder: (ctx, i) => _AlbumCard(
                     album: _albums[i],
-                    onTap: () => Navigator.push(ctx,
-                        MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: _albums[i]))),
+                    onTap: () {
+                      final open = widget.onOpenAlbum;
+                      if (open != null) {
+                        open(_albums[i]);
+                      } else {
+                        Navigator.push(ctx,
+                            MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: _albums[i])));
+                      }
+                    },
                     onLongPress: () => _showOptions(_albums[i]),
                   ),
                 ),
@@ -172,7 +182,14 @@ class _AlbumCard extends StatelessWidget {
 
 class AlbumDetailScreen extends StatefulWidget {
   final Album album;
-  const AlbumDetailScreen({super.key, required this.album});
+  /// Задан — экран встроен во вкладку главного экрана: вместо «назад» в шапке
+  /// крестик, который закрывает вкладку альбома.
+  final VoidCallback? onClose;
+  /// Эта вкладка сейчас на экране. Нужна, чтобы системная кнопка «назад»
+  /// перехватывалась только когда альбом виден (иначе скрытая вкладка
+  /// блокировала бы «назад» на всех остальных).
+  final bool isActive;
+  const AlbumDetailScreen({super.key, required this.album, this.onClose, this.isActive = true});
   @override
   State<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
 }
@@ -272,10 +289,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final embedded = widget.onClose != null;
     return PopScope(
-      canPop: !_selecting,
+      // Во вкладке «назад» закрывает режим выбора, затем саму вкладку альбома;
+      // как отдельный экран — как раньше (только выбор).
+      canPop: embedded ? !(widget.isActive) : !_selecting,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _selecting) _exitSelection();
+        if (didPop) return;
+        if (_selecting) {
+          _exitSelection();
+        } else if (embedded) {
+          widget.onClose!();
+        }
       },
       child: Scaffold(
       appBar: _selecting
@@ -303,6 +328,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               ),
             )
           : AppBar(
+              leading: embedded
+                  ? IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Закрыть вкладку альбома',
+                      onPressed: widget.onClose,
+                    )
+                  : null,
               title: Text(widget.album.name),
               actions: [
                 IconButton(
