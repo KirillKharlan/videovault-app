@@ -33,8 +33,9 @@ IndexedStack имеет фиксированные страницы (0 Videos, 1
   (с PARTIAL_WAKE_LOCK), нативное сохранение файла через SAF (`saveFileWithPicker`).
 - `media_export_service.dart` — галерея (`gal`), обрезка/MP3 через `ffmpeg_kit_flutter_new_audio`.
 - `settings_service.dart` — `shared_preferences`, режим «Видео/Музыка» (в музыке позиция не сохраняется).
-- `video_edit_service.dart`, `video_delete_service.dart`, `url_utils.dart` (нормализация ссылок для
-  детекта дубликатов), `album_shortcut_service.dart` — **нет в текущей базе**.
+- `video_edit_service.dart` (переименование, обложка, «горизонтальный просмотр»), `video_delete_service.dart`,
+  `url_utils.dart` (нормализация ссылок для детекта дубликатов), `gallery_import_service.dart` (импорт из галереи).
+- `album_shortcut_service.dart` — **нет в текущей базе** (см. «Что ещё не сделано»).
 
 БД (sqflite, версия **6**, миграции в `onUpgrade`): `albums`, `videos` (колонка `album_id` — легаси,
 не использовать), `album_videos` (видео ↔ альбомы, многие-ко-многим), `repeat_ranges`,
@@ -43,6 +44,39 @@ IndexedStack имеет фиксированные страницы (0 Videos, 1
 Нативная часть (`android/.../MainActivity.kt`, `BackgroundPlaybackService.kt`): PiP-кнопки,
 фоновый звук, SAF-сохранение. Не добавлять `file_picker`/`file_saver` — они ломали сборку.
 `share_plus` 12: `SharePlus.instance.share(ShareParams(files: [XFile(path)]))`.
+
+## Скачивание: один запрос (`/api/fetch`)
+`DownloadService` сначала вызывает `ApiClient.fetch`: сервер либо сразу отдаёт видео потоком (`_receiveStream` пишет в `dl_<id>.part`,
+потом переименование), либо возвращает `task_id` — тогда прежняя схема (polling `/api/progress` + `/api/file`). Прямой поток
+возможен только для одиночных mp4 (TikTok, Instagram, YouTube 360p); YouTube 720p+ идёт через задачу. Сборка этого изменения
+не проверялась (Dart-тулчейна у Claude нет) — при ошибках сборки присылай лог.
+
+## Скачивание на телефоне (экспериментальная опция, `DownloadMode`)
+Settings → «Способ скачивания»: server / local / auto. Код: `local_ytdlp_service.dart` (Dart), `YtDlpBridge.kt` (Kotlin, канал
+`com.videovault/ytdlp`), ветка `_doDownloadLocal` в `download_service.dart`. **Не проверено сборкой и запуском** — написано по памяти об
+API библиотеки youtubedl-android (fork junkfood02). Что наиболее вероятно придётся поправить по логу сборки/запуска:
+1. координаты и версия Gradle-артефакта (`0.17.+`, группа `io.github.junkfood02.youtubedl-android`);
+2. сигнатуры API в `YtDlpBridge.kt`: `YoutubeDL.getInstance().init/execute/destroyProcessById`, `FFmpeg.getInstance().init`,
+   колбэк прогресса из 3 аргументов `(Float, Long, String)`, `YoutubeDLResponse.out`;
+3. YouTube на телефоне может требовать JS-рантайм для yt-dlp (на сервере это Deno) — если извлечение падает с ошибкой про
+   n-challenge/JS, это главный риск всей затеи; TikTok/Instagram от него не зависят;
+4. R8 (правила в `proguard-rules.pro`), `minSdk 24`, `abiFilters arm64-v8a`.
+Первый запуск на устройстве: `ExceptionInInitializerError` при init (и имена классов вида `y6.e`) — R8 минифицировал библиотеку.
+Поэтому для release выключены `isMinifyEnabled/isShrinkResources` и добавлен `-dontobfuscate`; ошибки из Kotlin теперь содержат цепочку
+причин и верх стека (`YtDlpBridge.describe`). Если без R8 всё заработает — вернуть минификацию с нужными keep-правилами.
+Обновление yt-dlp: кнопка в Настройках + автообновление раз в 12 ч (`LocalYtdlpService.update/autoUpdateIfDue`, `YtDlpBridge.updateYtDlp`).
+Открытый вопрос: хватает ли встроенного Python (свежему yt-dlp нужен ≥ 3.11) — смотреть «после обновления» в результате кнопки.
+Не сделано: foreground-сервис для долгих загрузок, отмена, выбор способа для одного видео.
+
+## Обновление из приложения
+CI публикует GitHub Release `build-N` с APK, `UpdateService` его скачивает и ставит через `AppUpdater.kt` (FileProvider
+`UpdateFileProvider`). Подробности — в `PROJECT_MAP_APP.md`. Не проверено сборкой. Ограничение: только публичный репозиторий.
+
+## Документация
+`README.md`, `PROJECT_MAP_APP.md` (карта кода, БД, API, сборка) и `PROJECT_MAP_BACKEND.md`/`README_DEPLOY.md` бэкенда
+сверены с кодом в ноябре 2026. Объявленные, но не используемые в `lib/` пакеты: `permission_handler`, `timeago`, `intl`,
+`share_handler`. Адрес бэкенда: `https://videovault-server.onrender.com` (`api_client.dart`). Постоянный keystore
+(`android/keystore/`) лежит в репо намеренно — подпись сборок в CI.
 
 ## Бэкенд (Python, Render free)
 - `app.py` — Flask + gunicorn (`gthread`, 1 воркер, 8 потоков). `/api/info`, `/api/download`,

@@ -739,7 +739,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Navigator.pop(context);
             final video = _mgr.currentVideo;
             if (video != null) {
-              showVideoActionsSheet(context, video, onChanged: () => setState(() {}));
+              showVideoActionsSheet(context, video,
+                  onChanged: () => setState(() {}), allowDelete: false);
             }
           },
         ),

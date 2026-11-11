@@ -72,6 +72,14 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // yt-dlp на телефоне (экспериментально): отдельный канал, см. YtDlpBridge.kt
+        val ytdlpChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.videovault/ytdlp")
+        ytdlpChannel.setMethodCallHandler(YtDlpBridge(applicationContext, ytdlpChannel))
+
+        // Установка скачанного обновления приложения, см. AppUpdater.kt
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.videovault/updater")
+            .setMethodCallHandler(AppUpdater(this))
+
         if (!receiverRegistered) {
             val filter = IntentFilter().apply {
                 addAction(ACTION_PLAY_PAUSE_BROADCAST)

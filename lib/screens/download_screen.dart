@@ -3,6 +3,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
 import '../services/download_manager.dart';
+import '../services/local_ytdlp_service.dart';
+import '../services/settings_service.dart';
 import '../widgets/safe_bottom_sheet.dart';
 
 class DownloadScreen extends StatefulWidget {
@@ -55,12 +57,62 @@ class _DownloadScreenState extends State<DownloadScreen> {
   /// (или null при ошибке) — это нужно, чтобы _download() мог передать этот
   /// же Future в DownloadService и запустить скачивание ПАРАЛЛЕЛЬНО, не
   /// дожидаясь ответа.
+  /// Инфо о видео тем же способом, каким будет идти скачивание (настройка
+  /// «Способ скачивания»): на телефоне — локальным yt-dlp, через сервер — как
+  /// раньше, «авто» — сначала телефон, при ошибке сервер.
+  Future<VideoInfo> _loadInfo(String url, {bool refresh = false}) async {
+    final mode = SettingsService.instance.downloadMode;
+    if (mode == DownloadMode.server) return _api.fetchInfo(url, refresh: refresh);
+    try {
+      return await LocalYtdlpService.instance.fetchInfo(url);
+    } catch (e) {
+      if (mode == DownloadMode.local) rethrow;
+      return _api.fetchInfo(url, refresh: refresh);
+    }
+  }
+
+  static String _modeLabel(DownloadMode m) {
+    switch (m) {
+      case DownloadMode.server: return 'Через сервер';
+      case DownloadMode.local:  return 'На телефоне (экспериментально)';
+      case DownloadMode.auto:   return 'Авто: сначала на телефоне';
+    }
+  }
+
+  void _pickDownloadMode() {
+    final settings = SettingsService.instance;
+    showSafeModalBottomSheet(context: context,
+      builder: (_) => SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Padding(padding: EdgeInsets.all(16),
+              child: Text('Способ скачивания', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+          ...DownloadMode.values.map((m) => ListTile(
+            title: Text(_modeLabel(m)),
+            trailing: settings.downloadMode == m
+                ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary) : null,
+            onTap: () {
+              settings.setDownloadMode(m);
+              setState(() {});
+              Navigator.pop(context);
+            },
+          )),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 16),
+            child: Text('Список качеств зависит от способа: после смены нажмите '
+                '«Получить информацию» ещё раз.',
+                style: TextStyle(color: Colors.white38, fontSize: 12)),
+          ),
+        ]),
+      ),
+    );
+  }
+
   Future<VideoInfo?> _fetchInfo() async {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty) return null;
     setState(() { _fetchingInfo = true; _info = null; _fetchError = ''; });
     try {
-      final info = await _api.fetchInfo(url);
+      final info = await _loadInfo(url);
       // Пока шёл запрос, поле могли очистить (скачивание успело завершиться)
       // или вставить другую ссылку — устаревшее инфо в форму не пускаем.
       if (mounted && _urlCtrl.text.trim() == url) {
@@ -119,7 +171,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     // идёт отдельно от формы, чтобы не блокировать её для следующей ссылки.
     final VideoInfo? readyInfo = _info;
     final Future<VideoInfo?>? infoFuture = readyInfo == null
-        ? _api.fetchInfo(url).then<VideoInfo?>((i) => i).catchError((_) => null)
+        ? _loadInfo(url).then<VideoInfo?>((i) => i).catchError((_) => null)
         : null;
 
     final quality = _selectedQuality ?? 'best';
@@ -252,12 +304,15 @@ class _DownloadScreenState extends State<DownloadScreen> {
               const SizedBox(height: 12),
 
               _optionRow(Icons.hd, 'Качество',
-                  _selectedQuality != null
-                      ? (_selectedQuality!.isNotEmpty && RegExp(r'^\d+$').hasMatch(_selectedQuality!)
-                          ? '${_selectedQuality}p'
-                          : _selectedQuality!)
-                      : 'Выберите после загрузки инфо',
+                  _selectedQuality == null
+                      ? 'Выберите после загрузки инфо'
+                      : (_info?.qualityFullLabel(_selectedQuality!) ?? _selectedQuality!),
                   _info == null ? null : _pickQuality),
+
+              const Divider(color: Color(0xFF2A2A38), height: 24),
+
+              _optionRow(Icons.cloud_download_outlined, 'Способ скачивания',
+                  _modeLabel(SettingsService.instance.downloadMode), _pickDownloadMode),
 
               const Divider(color: Color(0xFF2A2A38), height: 24),
 
@@ -358,19 +413,55 @@ class _DownloadScreenState extends State<DownloadScreen> {
       );
 
   void _pickQuality() {
-    final qualities = _info?.qualities ?? [];
+    final info = _info;
+    if (info == null) return;
     showSafeModalBottomSheet(context: context,
-      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
-        const Padding(padding: EdgeInsets.all(16),
-            child: Text('Качество', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
-        ...qualities.map((q) => ListTile(
-          title: Text('${q}p'),
-          trailing: _selectedQuality == q
-              ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary) : null,
-          onTap: () { setState(() => _selectedQuality = q); Navigator.pop(context); },
-        )),
-      ]),
+      builder: (_) => SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Padding(padding: EdgeInsets.all(16),
+              child: Text('Качество', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+          ...info.qualities.map((q) => ListTile(
+            title: Text(info.qualityLabel(q)),
+            subtitle: info.qualitySizeLabel(q) == null ? null : Text(info.qualitySizeLabel(q)!),
+            trailing: _selectedQuality == q
+                ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary) : null,
+            onTap: () { setState(() => _selectedQuality = q); Navigator.pop(context); },
+          )),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.refresh),
+            title: const Text('Обновить список качеств'),
+            subtitle: const Text('Если нужного качества нет — запросить у сервера заново'),
+            onTap: () { Navigator.pop(context); _refreshQualities(); },
+          ),
+        ]),
+      ),
     );
+  }
+
+  /// Повторно запрашивает форматы у сервера (мимо его кэша) и обновляет только
+  /// список качеств: название, выбранный альбом и прочее остаются как есть.
+  Future<void> _refreshQualities() async {
+    final url = _urlCtrl.text.trim();
+    if (url.isEmpty) return;
+    setState(() { _fetchingInfo = true; _fetchError = ''; });
+    try {
+      final fresh = await _loadInfo(url, refresh: true);
+      if (!mounted) return;
+      if (_urlCtrl.text.trim() != url) {
+        setState(() => _fetchingInfo = false);
+        return;
+      }
+      setState(() {
+        _info = fresh;
+        if (_selectedQuality == null || !fresh.qualities.contains(_selectedQuality)) {
+          _selectedQuality = fresh.qualities.isNotEmpty ? fresh.qualities.first : 'best';
+        }
+        _fetchingInfo = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() { _fetchingInfo = false; _fetchError = '❌ $e'; });
+    }
   }
 
   void _pickAlbum() {
