@@ -3,6 +3,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 enum PlaybackMode { video, music }
 
+/// Как скачивать видео: через свой сервер, прямо на телефоне (yt-dlp внутри
+/// приложения) или «авто» — сначала на телефоне, при неудаче через сервер.
+enum DownloadMode { server, local, auto }
+
 /// Глобальные настройки приложения — читается/меняется через одну вкладку
 /// "Настройки" в нижнем меню, хранится в SharedPreferences (просто
 /// ключ-значение, без отдельной таблицы в БД — это настройки приложения в
@@ -12,8 +16,10 @@ class SettingsService extends ChangeNotifier {
   static final instance = SettingsService._();
 
   static const _keyPlaybackMode = 'playback_mode';
+  static const _keyDownloadMode = 'download_mode';
 
   PlaybackMode mode = PlaybackMode.video;
+  DownloadMode downloadMode = DownloadMode.server;
   bool _loaded = false;
 
   /// В режиме музыки позиция просмотра не запоминается и не предлагается —
@@ -27,8 +33,21 @@ class SettingsService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_keyPlaybackMode);
     mode = saved == 'music' ? PlaybackMode.music : PlaybackMode.video;
+    final savedDownload = prefs.getString(_keyDownloadMode);
+    downloadMode = DownloadMode.values.firstWhere(
+      (m) => m.name == savedDownload,
+      orElse: () => DownloadMode.server,
+    );
     _loaded = true;
     notifyListeners();
+  }
+
+  Future<void> setDownloadMode(DownloadMode newMode) async {
+    if (downloadMode == newMode) return;
+    downloadMode = newMode;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyDownloadMode, newMode.name);
   }
 
   Future<void> setMode(PlaybackMode newMode) async {
