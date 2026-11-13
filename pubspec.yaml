@@ -24,6 +24,7 @@ dependencies:
 
   # Видеоплеер
   video_player: ^2.8.6
+  just_audio: ^0.9.46              # фоновый звук: video_player на Android останавливается при сворачивании
   chewie: ^1.8.1                   # красивый UI поверх video_player
 
   # Хранение файлов

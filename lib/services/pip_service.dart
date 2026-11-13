@@ -22,6 +22,7 @@ class PipService {
   void Function()? onSkipNextAction;
   void Function()? onForward10Action;
   void Function()? onStopAction;
+  void Function()? onUserLeaveHint;
 
   void addListener(void Function(bool isInPip) listener) {
     _listeners.add(listener);
@@ -56,6 +57,9 @@ class PipService {
         break;
       case 'pipAction_stop':
         onStopAction?.call();
+        break;
+      case 'userLeaveHint':
+        onUserLeaveHint?.call();
         break;
     }
   }

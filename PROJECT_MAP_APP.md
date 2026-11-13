@@ -1,168 +1,254 @@
 # 🗺️ КАРТА ПРОЕКТА — videovault-app (Flutter)
 
-> Для быстрой ориентации без пересмотра всех файлов. Обновляй при
-> структурных изменениях.
+> Быстрая ориентация без перечитывания всех файлов. Обновляй при структурных
+> изменениях. Последняя сверка с кодом: ноябрь 2026. Контекст и договорённости
+> с владельцем — в `claude/claude.md`.
 
-## Структура (только код, без gradle/build мусора)
+## Что это
+
+Android-приложение: скачивает видео по ссылке (YouTube, TikTok, Instagram и др.) через
+свой бэкенд (`videovault-backend`, Render) и хранит их в локальной библиотеке с альбомами,
+плеером (повтор диапазонов, пропуски, фоновый звук, PiP) и экспортом (галерея, MP3, обрезка).
+Всё, что относится к библиотеке, хранится **на телефоне**; бэкенд истории не держит.
+
+## Структура (только код)
 
 ```
 videovault-app/
 ├── lib/
-│   ├── main.dart                      ← точка входа, MaterialApp, тема (тёмная,
-│   │                                     фиолетовый акцент), обработка shared
-│   │                                     intent (ссылки из YouTube/TikTok "Поделиться")
-│   ├── api/
-│   │   └── api_client.dart             ← HTTP-клиент к backend (Render).
-│   │                                     baseUrl задан здесь же.
-│   │                                     Модели: VideoInfo, TaskProgress
-│   ├── models/
-│   │   └── database.dart                ← SQLite (sqflite). Таблицы: albums, videos.
-│   │                                     Классы: Album, Video, AppDatabase (singleton),
-│   │                                     DBChangeNotifier (реактивные обновления UI),
-│   │                                     normalizeForSearch (поиск без учёта пунктуации)
+│   ├── main.dart                  ← вход, тёмная тема (фиолетовый акцент), нижнее меню,
+│   │                                приём ссылок из «Поделиться» (receive_sharing_intent)
+│   ├── api/api_client.dart        ← HTTP к бэкенду. baseUrl захардкожен.
+│   │                                Классы: ApiClient, VideoInfo, TaskProgress, ApiException
+│   ├── models/database.dart       ← sqflite (версия 6). Album, Video, SkipSegment, RepeatRange,
+│   │                                AppDatabase (синглтон), DBChangeNotifier, normalizeForSearch
 │   ├── services/
-│   │   ├── download_service.dart         ← Оркестрация скачивания:
-│   │   │                                   POST /api/download → task_id →
-│   │   │                                   polling /api/progress → скачивание файла
-│   │   │                                   + миниатюры с /api/file, сохранение в БД
-│   │   └── gallery_import_service.dart    ← Импорт видео из галереи телефона
-│   │                                     (image_picker + flutter_video_thumbnail_plus)
+│   │   ├── download_manager.dart  ← ОЧЕРЕДЬ загрузок (DownloadJob, по одной за раз), живёт вне экранов
+│   │   ├── download_service.dart  ← одна загрузка: /api/download → опрос /api/progress →
+│   │   │                            файл с /api/file → миниатюра → запись в БД; уведомления, ретраи
+│   │   ├── playback_manager.dart  ← синглтон плеера (ChangeNotifier), см. ниже
+│   │   ├── local_ytdlp_service.dart ← yt-dlp НА ТЕЛЕФОНЕ: канал `com.videovault/ytdlp` (init, version, info, download, cancel),
+│   │   │                            разбор JSON в VideoInfo, селекторы формата как на сервере
+│   │   ├── update_service.dart    ← обновление приложения из GitHub Releases (ChangeNotifier): проверка, скачивание APK, установка
+│   │   ├── pip_service.dart       ← MethodChannel `com.videovault/pip` (PiP, фоновый сервис, SAF)
+│   │   ├── media_export_service.dart ← галерея (gal), обрезка, mp4→mp3 (ffmpeg_kit), сохранение на устройство
+│   │   ├── gallery_import_service.dart ← импорт видео из галереи (image_picker + превью)
+│   │   ├── video_edit_service.dart     ← переименование, своя обложка, «горизонтальный просмотр»
+│   │   ├── video_delete_service.dart   ← полное удаление (файл + обложка + БД; закрывает плеер)
+│   │   ├── settings_service.dart       ← shared_preferences; режим «Видео / Музыка»
+│   │   └── url_utils.dart              ← нормализация ссылок для детекта дубликатов
 │   ├── screens/
-│   │   ├── home_screen.dart              ← Список всех видео (главный экран).
-│   │   │                                   Автообновление через DBChangeNotifier,
-│   │   │                                   импорт из галереи, поиск.
-│   │   ├── albums_screen.dart             ← Список альбомов + AlbumDetailScreen
-│   │   │                                   с кнопкой "Add videos"
-│   │   ├── album_video_picker_screen.dart  ← Мультивыбор видео для добавления
-│   │   │                                    в альбом (с нумерацией выбора)
-│   │   ├── download_screen.dart            ← Экран "Скачать видео": ввод URL,
-│   │   │                                    получение инфо, редактирование
-│   │   │                                    названия, выбор качества/альбома
-│   │   └── player_screen.dart              ← Просмотр видео (video_player + chewie),
-│   │                                       слайдер громкости
+│   │   ├── home_screen.dart            ← Videos: список, поиск, импорт из галереи, мультивыбор/удаление
+│   │   ├── albums_screen.dart          ← Albums + AlbumDetailScreen («+» открывает пикер)
+│   │   ├── album_video_picker_screen.dart ← мультивыбор видео в альбом с нумерацией
+│   │   ├── download_screen.dart        ← ввод URL, инфо, название, качество, альбом
+│   │   ├── download_queue_screen.dart  ← Queue: задания очереди, смена альбома, retry, удаление
+│   │   ├── player_screen.dart          ← плеер (video_player + chewie), панели диапазонов/пропусков/таймера
+│   │   └── settings_screen.dart        ← Settings: режим воспроизведения
 │   └── widgets/
-│       ├── video_card.dart                 ← UI-карточка видео. Поддерживает режим
-│       │                                     мультивыбора (selectionMode/selected/
-│       │                                     selectionOrder) для album_video_picker
-│       └── safe_bottom_sheet.dart           ← showSafeModalBottomSheet — обёртка
-│                                            над showModalBottomSheet с защитой от
-│                                            перекрытия системными кнопками навигации
-├── android/
-│   ├── app/src/main/AndroidManifest.xml    ← разрешения (INTERNET, POST_NOTIFICATIONS,
-│   │                                        READ_MEDIA_VIDEO/IMAGES), intent-filter
-│   │                                        для share (SEND) и MAIN
-│   └── app/src/main/kotlin/.../MainActivity.kt
-├── .github/workflows/build.yml              ← CI: сборка APK через GitHub Actions
-├── pubspec.yaml                              ← зависимости (dio, sqflite, video_player,
-│                                               receive_sharing_intent, cached_network_image,
-│                                               image_picker, flutter_video_thumbnail_plus)
-└── README.md
+│       ├── video_card.dart             ← карточка; режим выбора (selectionMode/selected/selectionOrder)
+│       ├── video_actions_sheet.dart    ← меню видео: выбрать, поделиться, альбомы, переименовать,
+│       │                                 обложка, «горизонтальный просмотр»
+│       ├── video_albums_dialog.dart    ← выбор альбомов для видео (несколько сразу)
+│       ├── selection_bar.dart          ← панель действий при мультивыборе
+│       └── safe_bottom_sheet.dart      ← showSafeModalBottomSheet (учёт системной навигации)
+├── android/app/src/main/
+│   ├── AndroidManifest.xml            ← разрешения, intent-filter SEND (share) и MAIN
+│   └── kotlin/com/example/videovault/
+│       ├── MainActivity.kt            ← канал `com.videovault/pip`, PiP-кнопки, SAF-сохранение; регистрирует канал yt-dlp
+│       ├── AppUpdater.kt              ← канал `com.videovault/updater`: install(path) → запуск системного установщика APK
+│       ├── UpdateFileProvider.kt      ← FileProvider для отдачи APK установщику (cache/updates/, см. res/xml/update_file_paths.xml)
+│       ├── YtDlpBridge.kt             ← мост к youtubedl-android (Python+yt-dlp+ffmpeg внутри APK); ВЕСЬ код, трогающий API библиотеки
+│       └── BackgroundPlaybackService.kt ← foreground-сервис фонового звука (PARTIAL_WAKE_LOCK)
+├── android/keystore/videovault.keystore ← постоянный ключ подписи (см. «Сборка»)
+├── .github/workflows/build.yml        ← CI: сборка APK
+├── pubspec.yaml
+└── claude/claude.md, PROJECT_MAP_APP.md, README.md
 ```
 
-## Поток данных: скачивание видео
+## Способ скачивания (настройка `DownloadMode`: server / local / auto)
+
+Хранится в `SettingsService.downloadMode` (SharedPreferences `download_mode`), меняется в Настройках и на экране загрузки (строка
+«Способ скачивания»). По умолчанию `server`. Применяется и к получению инфо (`download_screen._loadInfo`), и к скачиванию
+(`DownloadService.download`):
+- `server` — всё как описано ниже (сервер, `/api/fetch`).
+- `local` — `_doDownloadLocal`: yt-dlp на телефоне (`LocalYtdlpService`) качает прямо в папку видео как `l<ms>.<ext>`, затем
+  файл переименовывается и идёт общий финал `_finishVideo` (миниатюра, уведомление, запись в БД). Сервер не используется.
+- `auto` — сначала локально, при любой ошибке — сервер.
+Прогресс yt-dlp считается отдельно для видео- и аудиодорожки, процент может «сбрасываться». Отмены скачивания нет.
+yt-dlp внутри приложения — это версия, зашитая в библиотеку на момент её выпуска, поэтому он обновляется: кнопка «Обновить yt-dlp»
+в Настройках и тихое автообновление раз в 12 ч при запуске (если способ не «Через сервер»); `YtDlpBridge.updateYtDlp` вызывает
+`updateYoutubeDL` библиотеки через рефлексию, запасной вариант — `yt-dlp -U`. Свежему yt-dlp нужен Python ≥ 3.11 — подходит ли
+встроенный Python, видно по версии «после обновления». Ограничения: нет foreground-сервиса — приложение нужно держать открытым;
+сборка проверена только чтением кода. В Настройках есть кнопка «Проверить yt-dlp на телефоне» (версия или текст ошибки).
+
+Android: зависимости `io.github.junkfood02.youtubedl-android:library` и `:ffmpeg` (версия `0.17.+`, см. `build.gradle.kts`), `minSdk ≥ 24`,
+только `arm64-v8a`, `useLegacyPackaging = true`, правила R8 в `android/app/proguard-rules.pro`.
+
+## Обновление приложения из приложения
+
+CI (`.github/workflows/build.yml`) после удачной сборки публикует **GitHub Release** `build-<run_number>` с файлом
+`VideoVault-<run_number>.apk` (хранятся 5 последних) и «вшивает» в приложение `--dart-define=UPDATE_REPO=<owner/repo>` и
+`--dart-define=BUILD_NUMBER=<run_number>`. `UpdateService`: при запуске (через 3 с) и по кнопке в Настройках читает
+`GET https://api.github.com/repos/<repo>/releases/latest`, номер сборки берёт из тега (`build-123` → 123); новее установленной —
+скачивает APK (dio) в `cache/updates/`, проверяет размер и вызывает `AppUpdater.install` → системный установщик. Первый раз Android
+просит разрешить этому приложению «установку неизвестных приложений» (`REQUEST_INSTALL_PACKAGES`), потом установка проходит поверх
+(подпись та же — постоянный keystore). В локальных сборках (без dart-define) проверка отключена. **Репозиторий должен быть публичным**:
+релизы читаются без токена. Права `contents: write` для workflow заданы в самом файле; если организация запрещает — включить
+Settings → Actions → General → Workflow permissions → Read and write.
+
+## Навигация (main.dart)
+
+Нижнее меню: **Videos · Albums · [Альбом] · Download · [Queue] · Settings**.
+- Queue видна только при 2+ загрузках.
+- Вкладка альбома появляется, когда в Albums открыли альбом (`_openAlbum`): подпись — название (до 9 символов, полное в tooltip).
+  Она живёт, пока её не закрыли крестиком в шапке (или системным «назад», пока вкладка на экране): с неё можно уходить на другие
+  вкладки и возвращаться — список, прокрутка и режим выбора сохраняются (`IndexedStack`). Открыли другой альбом — вкладка заменяется.
+  Переименование/удаление альбома подхватывает `_refreshOpenAlbum` (слушает `DBChangeNotifier`).
+- Страницы `IndexedStack` фиксированы: 0 Videos, 1 Albums, 2 Download, 3 Queue, 4 Settings, 5 Album; порядок в меню задаёт список `order`
+  в `MainScreen.build` (`toDisplay`/`toReal` по нему). При 6 вкладках подписи показываются только у выбранной.
+- `AlbumDetailScreen(onClose, isActive)`: `onClose != null` — режим вкладки (крестик вместо «назад»); `isActive` нужен, чтобы `PopScope`
+  скрытой вкладки не блокировал «назад» на остальных.
+- Ссылка из «Поделиться» переключает на страницу 2 с заполненным полем URL.
+
+## Бэкенд-API (api_client.dart)
+
+`baseUrl = https://videovault-server.onrender.com`. Если адрес Render изменился, правь только здесь.
+
+| Метод | Таймаут | Назначение |
+|---|---|---|
+| `POST /api/info` | 90 с | метаданные: title, thumbnail, duration, uploader, platform, qualities, quality_sizes. `fetchInfo(url, refresh: true)` — мимо кэша сервера |
+| `POST /api/fetch` | 3 мин (до заголовков) | **основной путь**: сразу видео потоком (`video/mp4`) либо JSON `{mode:"task",task_id}` |
+| `POST /api/download` | 90 с | старт задачи, ответ `task_id` (запасной путь; также вызывается, если сервер старый и `/api/fetch` отвечает 404/405) |
+| `GET /api/progress/<id>` | 15 с | статус задачи |
+| `GET /api/file/<id>` | — | сам файл (`fileUrl`), качается через dio |
+| `GET /health` | 10 с | пинг/«разбудить» сервер |
+
+Таймаут 90 с нужен, потому что Render free засыпает, и первый запрос идёт 15–40 с.
+`quality` уходит строкой: `"best"` или число без `p` (`"720"`); бэкенд также понимает `mp3`/`audio`.
+
+## Поток: скачивание
 
 ```
-download_screen.dart
-  → api_client.fetchInfo(url)           [POST /api/info]
-  → показывает title/duration/качества
-  → пользователь жмёт "Скачать"
-  → download_service.download()
-      → api_client.startDownload()       [POST /api/download] → task_id
-      → цикл: api_client.getProgress()   [GET /api/progress/<id>] каждые ~2 сек
-      → когда status=="done":
-          → скачивает файл                [GET /api/file/<id>]
-          → сохраняет в AppDatabase (таблица videos)
+download_screen: кнопка «Скачать» (кнопки «Получить информацию» больше нет)
+  → `_loadInfo(url)` (сервер: POST /api/info, наполняет его кэш; телефон: локальный yt-dlp --dump-single-json)
+  → окно выбора качества (`_pickQualityForDownload`): превью, название (можно изменить), качества с размерами, «Обновить список»
+  → выбор качества сразу ставит загрузку в очередь
+  → DownloadManager.enqueue(...)                         (очередь, по одной за раз)
+     → DownloadService.download(...)
+         → ждёт infoFuture (до 20 с): сервер планирует прямой поток по инфо из своего кэша
+         → ОДИН запрос  api_client.fetch(url, quality)   [POST /api/fetch]
+             ├─ video/mp4 → _receiveStream: пишет тело в videos/dl_<id>.part по мере поступления
+             │             (прогресс по X-File-Size — это оценка; нет оценки → 0 = неопределённая полоса),
+             │             затем .part переименовывается в <название>_<id>.mp4
+             └─ {mode:"task"} → запасной путь как раньше: опрос /api/progress каждые 1,5 с,
+                                при done файл с /api/file (dio)
+         → миниатюра в thumbs/thumb_<id>.jpg
+         → Video в БД (album_videos по albumIdResolver на момент сохранения)
 ```
 
-## Важные детали реализации
+Ретраи (`_withRetry`, 3 попытки) покрывают и обрыв посреди потока: недокачанный `.part` удаляется, запрос идёт заново.
+Устаревшие `dl_*.part` (приложение убили посреди загрузки) чистятся при следующей загрузке (старше часа).
 
-- **baseUrl** backend URL захардкожен в `api_client.dart` — если меняется
-  адрес на Render, обновлять здесь.
-- **Таймауты** увеличены (90 сек на info/download-старт) — Render free plan
-  засыпает и может не успеть ответить за стандартные 30 сек.
-- **quality** отправляется как строка: `"best"` или число вроде `"720"`
-  (без `p` — `p` добавляется только в UI для отображения, не в запросе).
-- **Share-интеграция**: `receive_sharing_intent` ловит URL когда юзер жмёт
-  "Поделиться" в YouTube/TikTok → открывает download_screen с уже
-  заполненным полем.
-- **SQLite** — данные видео (путь к файлу, альбом, метаданные) хранятся
-  локально на телефоне, backend не хранит историю пользователя.
-- **APK собирается через GitHub Actions** (не локально) — см.
-  `.github/workflows/build.yml`. После пуша в репо — актions сам собирает
-  и публикует artifact с APK.
+- Выбор качества: после нажатия «Скачать» (`download_screen.dart`, `_pickQualityForDownload`) — окно со списком качеств и размерами («1080p · ~85 МБ»,
+  `VideoInfo.qualityFullLabel`), кнопкой «Обновить список качеств» (заново запрашивает форматы мимо кэша) и изменением названия. Выбор качества
+  = старт загрузки. Ссылка из «Поделиться» только подставляется в поле.
+- Инфо (`infoFuture`) загрузка ждёт до 20 с, чтобы сервер мог спланировать прямой поток по своему кэшу; не дождались — идём дальше,
+  сервер ответит запасным путём (задача). Недостающую инфо (обложка, платформа, длительность) загрузка добирает ещё раз перед сохранением.
+- Альбом задания можно менять до самого сохранения (`albumIdResolver`, `DownloadManager.setAlbum`).
+- Одиночное упавшее задание убирается из очереди (ошибка показана на экране загрузки), при 2+ остаётся для retry.
+- Сетевые ошибки ретраятся в `_withRetry`; `wakelock_plus` держит устройство активным на время загрузки.
+- Запасной путь: приложение считает завершённой задачу только по `done`/`error`. Остальные статусы бэкенда
+  (`queued`, `fetching_info`, `downloading`) — «в процессе».
+- Дубликаты: `findVideoBySourceUrl` + `normalizeUrl` из `url_utils.dart`.
 
-## Известные особенности / грабли
+## БД (sqflite, `videovault.db`, версия 6)
 
-- Если сервер на Render "спит" — первый запрос может занять 20-40 сек,
-  UI должен показывать это состояние, а не сразу считать ошибкой.
-- `TaskProgress.status` может быть: `queued`, `downloading`, `done`, `error`
-  — polling должен корректно завершаться на `done`/`error`.
-- Video duration/качество могут прийти пустыми для YouTube Shorts —
-  это баг backend, не Flutter (см. PROJECT_MAP_BACKEND.md).
+| Таблица | Поля / назначение |
+|---|---|
+| `albums` | id, name, cover_path, created_at |
+| `videos` | id, title, file_path, thumbnail_path, source_url, platform, duration, file_size, ~~album_id~~ (легаси, не использовать), letterbox_landscape, last_position_ms, added_at |
+| `album_videos` | (album_id, video_id) PK, added_at — видео ↔ альбомы, многие-ко-многим |
+| `repeat_ranges` | video_id, label, start_ms, end_ms, is_default, end_behavior (`loop` по умолчанию) |
+| `video_skips` | video_id, start_ms, end_ms — «пропуски» (например, реклама) |
+
+Миграции: `onUpgrade` ступенями `oldVersion < 2…6`. При изменении схемы поднимай версию и добавляй ступень.
+`DBChangeNotifier.bump()` вызывается при записях; экраны подписываются на него в `initState`
+(`addListener(_load)`). Исключение: позиция просмотра (`updateLastPosition`) bump не делает.
+Поиск (`searchVideos`) фильтрует в Dart через `normalizeForSearch` (игнорирует пунктуацию и регистр).
+
+## Плеер (playback_manager.dart)
+
+**Фоновый звук.** `video_player` на Android привязан к поверхности: при сворачивании она уничтожается, и плагин останавливает плеер —
+звук обрывался, хотя foreground-сервис держал процесс. Теперь при включённом «Свернуть, звук в фоне» (`isBackgroundAudio`) менеджер
+слушает `AppLifecycleState` (`_LifecycleBridge`): на `hidden/paused` звук передаётся `AudioPlayer` из `just_audio` (`_switchToAudioEngine`,
+позиция сохраняется), на `resumed` — обратно в видео (`_returnToVideo`). Пропуски, диапазон повтора и переход к следующему видео работают
+в обоих режимах через общий `_tick(pos, dur, playing, seek, play)`; следующий ролик в фоне грузится в аудио-движок (`_loadInAudioEngine`).
+Чтобы в момент сворачивания не было провала, аудиоплеер открывает файл заранее (`_prepareAudio`), а передача запускается по самому
+раннему сигналу — `Activity.onUserLeaveHint` (Домой/недавние; канал `com.videovault/pip`, метод `userLeaveHint`), с поправкой позиции на
+прошедшее время и ~150 мс перекрытия, пока видео не заглушено. `hidden/paused` остаются запасным путём. Если вместо этого включился PiP —
+звук возвращается видео (`_onPipChanged`).
+**Громкость** — `PlaybackManager.volume/setVolume`, общая для видео и аудио-движка; ползунок в шапке плеера и пункт «Громкость» в меню ⋮
+chewie (`widgets/volume_dialog.dart`, работает и в полноэкранном режиме, где виден только вкл/выкл звука).
+
+Синглтон, переживает закрытие экрана. Умеет:
+- продолжить с места остановки (`last_position_ms`); в режиме **Музыка** позиция не сохраняется;
+- диапазоны повтора (сохранённые и «на лету»: `applyRange`, `setAdhocRange`) с поведением в конце;
+- пропуски (`addSkip`, `removeSkip`, `setSkipsEnabled`, режим разметки `startMarkingSkip`);
+- плейлист и переход по кругу (`playNext`, `playFirst`);
+- таймер сна, фоновый звук (`enableBackgroundAudio`), PiP, wakelock;
+- громкость слайдером (`VideoPlayerController.setVolume`).
+
+## Нативная часть и канал `com.videovault/pip`
+
+Методы: `isPipSupported`, `setAutoEnter`, `enterPip`, `updatePipState`, `startBackgroundService`,
+`stopBackgroundService`, `updateBackgroundNotification`, `saveFileWithPicker` (SAF).
+Разрешения: INTERNET, POST_NOTIFICATIONS, READ_MEDIA_VIDEO/IMAGES, READ/WRITE_EXTERNAL_STORAGE,
+FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK. **Не добавлять `file_picker`/`file_saver`**: ломали сборку.
+
+## Сборка
+
+- CI: `.github/workflows/build.yml` — на push в `master` или вручную. Java 17 (zulu), Flutter stable,
+  `flutter clean` → `pub get` → `flutter build apk --release --build-number=${{ github.run_number }}`.
+  APK выкладывается артефактом `VideoVault-APK`. `run_number` растёт, поэтому Android предлагает обновление.
+- Подпись: постоянный `android/keystore/videovault.keystore` лежит в репозитории намеренно, release-сборка
+  подписывается им (через `signingConfigs.getByName("debug")` в `build.gradle.kts`). Благодаря этому APK
+  из разных сборок ставятся поверх друг друга. Для публикации в магазин нужен отдельный ключ.
+- Локально: `flutter pub get` → `flutter build apk --release`
+  (результат: `build/app/outputs/flutter-apk/app-release.apk`).
+- Claude собрать проект не может: ошибки сборки присылает владелец логом.
+
+## Зависимости (pubspec.yaml)
+
+Нативные (Gradle, не pubspec): youtubedl-android `library` + `ffmpeg` — yt-dlp, Python и ffmpeg внутри APK (+десятки МБ).
+
+Используются: `http`, `dio`, `sqflite`, `path`, `path_provider`, `video_player`, `chewie`,
+`shared_preferences`, `cached_network_image`, `share_plus` (12.x), `receive_sharing_intent`,
+`flutter_local_notifications`, `wakelock_plus`, `image_picker`, `flutter_video_thumbnail_plus`,
+`gal`, `ffmpeg_kit_flutter_new_audio`.
+
+Объявлены, но **в `lib/` не импортируются**: `permission_handler`, `timeago`, `intl`, `share_handler`
+(и закомментированный дубль `receive_sharing_intent`). Можно удалить при очередной чистке зависимостей,
+после проверки сборки.
+
+Нюансы API:
+- `share_plus` 12: `SharePlus.instance.share(ShareParams(files: [XFile(path)]))`.
+- `flutter_video_thumbnail_plus` заменил заброшенный `video_thumbnail` (тот вызывал `jcenter()` и ломал
+  сборку на AGP 9+). Класс `FlutterVideoThumbnailPlus`, `thumbnailPath` — полный путь к файлу с расширением.
+- `ffmpeg_kit_flutter` снят с pub.dev; используется форк `ffmpeg_kit_flutter_new_audio` (с lame для MP3).
 
 ## Что смотреть при новой ошибке
 
-1. Ошибка похожа на текст с сервера (bot/format/unsupported и т.п.) —
-   смотри backend, не Flutter
-2. "Задача не найдена" в UI — смотри `download_service.dart` (polling
-   логика) и backend `tasks.json`
-3. UI не обновляется / зависает — смотри `download_screen.dart`
-   state management (`setState`, `StreamBuilder` если есть)
-4. Проблемы с APK/сборкой — смотри `.github/workflows/build.yml` и
-   `pubspec.yaml` на предмет несовместимых версий пакетов
+1. Текст похож на серверный (bot / format / unsupported / cookies) → смотри бэкенд (`PROJECT_MAP_BACKEND.md`).
+2. «Задача не найдена» → сервер перезапустился посреди задачи; смотри опрос в `download_service.dart`
+   и `reconcile_stale_tasks` в бэкенде.
+3. UI не обновляется → подписка на `DBChangeNotifier` и `setState` в экране.
+4. Ошибка сборки → `build.yml`, `pubspec.yaml` (версии пакетов), лог GitHub Actions.
+5. Видео без длительности/качеств (Shorts) → обычно баг бэкенда, не Flutter.
 
-## Новые фичи (второй раунд правок)
+## Известные ограничения
 
-- **Реактивные обновления**: `DBChangeNotifier.instance` — ChangeNotifier-синглтон
-  в database.dart. Все write-операции (insert/update/delete) вызывают `.bump()`.
-  HomeScreen/AlbumsScreen/AlbumDetailScreen подписываются в initState через
-  `addListener(_load)`, отписываются в dispose. Больше нет ручной кнопки Refresh.
-- **Мультивыбор видео в альбом**: AlbumDetailScreen → кнопка "+" →
-  AlbumVideoPickerScreen. Видео НЕ удаляются из общего списка (просто меняется
-  `album_id`). VideoCard поддерживает `selectionMode`/`selected`/`selectionOrder`
-  для подсветки и нумерации выбора.
-- **safe_bottom_sheet.dart**: все bottom sheets теперь через
-  `showSafeModalBottomSheet` вместо голого `showModalBottomSheet` — фикс
-  перекрытия системными кнопками навигации телефона.
-- **Громкость**: PlayerScreen — иконка в шапке открывает Slider (0-100%),
-  управляет `VideoPlayerController.setVolume()` напрямую, отдельно от
-  встроенного mute-переключателя Chewie.
-- **Переименование при скачивании**: DownloadScreen — поле "Название" после
-  получения инфо, редактируемое, с кнопкой сброса к оригиналу. Передаётся в
-  `DownloadService.download(customTitle: ...)`.
-- **Импорт из галереи**: `gallery_import_service.dart` — image_picker для
-  выбора видео + flutter_video_thumbnail_plus для генерации превью + video_player для
-  чтения длительности. Кнопка на HomeScreen (иконка галереи в шапке).
-- **Поиск без учёта пунктуации**: `normalizeForSearch()` в database.dart —
-  убирает все не-буквенно-цифровые символы перед сравнением. searchVideos
-  теперь фильтрует в Dart (не SQL LIKE), т.к. нужна polnaya нормализация.
-- **Миниатюры YouTube**: при скачивании сервис скачивает превью по URL из
-  `VideoInfo.thumbnail` и сохраняет локально (`thumbs/thumb_<taskId>.jpg`),
-  путь пишется в `Video.thumbnailPath`. Раньше этого не было — карточки
-  показывали только заглушку.
-- **Длительность видео**: раньше `Video.duration` всегда сохранялся как 0.
-  Теперь `DownloadService.download()` принимает `VideoInfo? info` (уже
-  полученный через /api/info) и берёт `info.duration` напрямую — без лишнего
-  сетевого запроса.
-
-## Известные ограничения нового кода
-
-- Автоподгрузка (infinite scroll) НЕ реализована в классическом смысле —
-  вместо этого весь список подгружается сразу, но обновляется автоматически
-  (реактивно) без ручной кнопки. Для типичного личного использования (сотни,
-  не десятки тысяч видео) это нормально по производительности. Если библиотека
-  вырастет очень большой — тогда стоит добавить настоящую пагинацию с LIMIT/OFFSET.
-- flutter_video_thumbnail_plus генерирует превью только для видео из галереи (локальный
-  импорт) — для скачанных с YouTube используется официальное превью с сервера.
-
-## Фикс сборки (video_thumbnail → flutter_video_thumbnail_plus)
-
-`video_thumbnail: ^0.5.3` был заброшен — его `android/build.gradle` вызывает
-устаревший `jcenter()`, которого больше не существует, что ломает сборку на
-AGP 9+ ("Could not find method jcenter()"). Заменён на активно поддерживаемый
-`flutter_video_thumbnail_plus: ^1.0.5` — тот же функционал, другой API:
-- Класс: `FlutterVideoThumbnailPlus` (не `VideoThumbnail`)
-- `imageFormat: ImageFormat.png` (без namespace-префикса, само название пакета
-  уже уникально)
-- `thumbnailPath` — теперь это ПОЛНЫЙ путь к файлу назначения (с расширением),
-  а не путь к директории как было в старом пакете
+- Список видео грузится целиком (без пагинации): для сотен записей нормально, для десятков тысяч нужен LIMIT/OFFSET.
+- Превью для скачанных видео берётся с сервера YouTube; `flutter_video_thumbnail_plus` — только для импорта из галереи.
+- Не реализовано: скачивание плейлиста, субтитры, вкладка-ярлык последнего альбома
+  (в этой базе нет `album_shortcut_service.dart`).
