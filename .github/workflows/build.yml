@@ -5,6 +5,11 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+# contents: write — чтобы публиковать релиз с APK (из него приложение
+# скачивает обновления прямо у себя в настройках).
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -34,10 +39,39 @@ jobs:
       - name: Build APK
         # --build-number растёт с каждым запуском (номер CI-рана) — иначе
         # versionCode всегда одинаковый и Android не предлагает обновление.
-        run: flutter build apk --release --build-number=${{ github.run_number }}
+        # UPDATE_REPO и BUILD_NUMBER «вшиваются» в приложение: по ним оно
+        # знает, где искать новые сборки и какая сейчас установлена.
+        run: >
+          flutter build apk --release
+          --build-number=${{ github.run_number }}
+          --dart-define=UPDATE_REPO=${{ github.repository }}
+          --dart-define=BUILD_NUMBER=${{ github.run_number }}
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: VideoVault-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      # Релиз с APK: приложение читает «последний релиз» через GitHub API и
+      # качает файл без авторизации (работает для ПУБЛИЧНОГО репозитория).
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_number }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk "VideoVault-$RUN.apk"
+          # повторный запуск того же рана (Re-run) не должен падать на уже существующем релизе
+          gh release delete "build-$RUN" --repo "$REPO" --cleanup-tag --yes || true
+          gh release create "build-$RUN" "VideoVault-$RUN.apk" \
+            --repo "$REPO" \
+            --target "${{ github.sha }}" \
+            --title "Сборка #$RUN" \
+            --notes "${NOTES:-Сборка #$RUN}" \
+            --latest
+          # храним только 5 последних релизов сборок
+          gh release list --repo "$REPO" --limit 100 --json tagName \
+            --jq '[.[] | select(.tagName | startswith("build-"))] | .[5:] | .[].tagName' \
+            | xargs -r -n1 gh release delete --repo "$REPO" --cleanup-tag --yes

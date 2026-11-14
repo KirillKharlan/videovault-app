@@ -268,7 +268,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'videovault.db');
     return openDatabase(
       path,
-      version: 6,
+      version: 7,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE albums (
@@ -307,6 +307,7 @@ class AppDatabase {
             album_id INTEGER NOT NULL,
             video_id INTEGER NOT NULL,
             added_at INTEGER NOT NULL,
+            position INTEGER,
             PRIMARY KEY (album_id, video_id)
           )
         ''');
@@ -371,6 +372,11 @@ class AppDatabase {
             )
           ''');
         }
+        if (oldVersion < 7) {
+          // Свой порядок видео в альбоме (перетаскивание). NULL = порядок не
+          // задавали: такие видео идут сверху от новых к старым, как и раньше.
+          await db.execute('ALTER TABLE album_videos ADD COLUMN position INTEGER');
+        }
       },
     );
   }
@@ -417,9 +423,23 @@ class AppDatabase {
       SELECT v.* FROM videos v
       JOIN album_videos av ON av.video_id = v.id
       WHERE av.album_id = ?
-      ORDER BY v.added_at DESC
+      ORDER BY (av.position IS NULL) DESC, av.position ASC, v.added_at DESC
     ''', [albumId]);
     return rows.map(Video.fromMap).toList();
+  }
+
+  /// Сохраняет порядок видео в альбоме: позиция = индекс в [orderedVideoIds].
+  /// Новые видео (без позиции) потом встают сверху, остальные — в этом порядке.
+  Future<void> setAlbumOrder(int albumId, List<int> orderedVideoIds) async {
+    final d = await db;
+    final batch = d.batch();
+    for (var i = 0; i < orderedVideoIds.length; i++) {
+      batch.update('album_videos', {'position': i},
+          where: 'album_id = ? AND video_id = ?',
+          whereArgs: [albumId, orderedVideoIds[i]]);
+    }
+    await batch.commit(noResult: true);
+    DBChangeNotifier.instance.bump();
   }
 
   /// Поиск игнорирует регистр и любые символы-разделители (запятые, дефисы,

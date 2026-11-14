@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/database.dart';
+import '../widgets/volume_dialog.dart';
 import 'pip_service.dart';
 import 'settings_service.dart';
 
@@ -34,6 +36,11 @@ class PlaybackManager extends ChangeNotifier {
     PipService.instance.onSkipNextAction = playNext;
     PipService.instance.onForward10Action = () => skipForward(const Duration(seconds: 10));
     PipService.instance.onStopAction = () => close();
+    PipService.instance.onUserLeaveHint = _onUserLeaveHint;
+    // Если вместо фона включилось окно PiP (автозаход в PiP), видео должно
+    // остаться видео, а не уйти в звук.
+    PipService.instance.addListener(_onPipChanged);
+    WidgetsBinding.instance.addObserver(_LifecycleBridge(this));
   }
   static final PlaybackManager instance = PlaybackManager._internal();
 
@@ -61,6 +68,32 @@ class PlaybackManager extends ChangeNotifier {
   bool _endHandled = false;
 
   bool _wakelockOn = false;
+
+  // ── Громкость (общая для видео, аудио-движка и ползунка в полноэкранном режиме) ──
+  double volume = 1.0;
+
+  // ── Фоновый звук ─────────────────────────────────────────────────────
+  // video_player на Android привязан к поверхности (Surface): когда приложение
+  // сворачивается, поверхность уничтожается и плагин останавливает/пересоздаёт
+  // плеер — звук обрывается, даже если процесс держит foreground-сервис.
+  // Поэтому в режиме «звук в фоне» при сворачивании звук передаётся
+  // отдельному аудиоплееру (just_audio — ему поверхность не нужна), а при
+  // возврате в приложение — обратно в видео с того же места. Пропуски,
+  // диапазон повтора и переход к следующему видео работают в обоих режимах
+  // через один и тот же _tick().
+  AudioPlayer? _audio;
+  bool _audioActive = false;
+  bool _audioSwitching = false;
+  StreamSubscription<Duration>? _audioPosSub;
+  StreamSubscription<PlayerState>? _audioStateSub;
+  // Аудиоплеер заранее открывает файл текущего видео (пока приложение ещё на экране),
+  // иначе при сворачивании звук пропадал бы на время загрузки файла.
+  int? _preparedAudioVideoId;
+  Future<void>? _preparing;
+  Stopwatch? _leaveWatch; // сколько прошло с момента, когда запомнили позицию видео
+  bool _playingAtLeave = false;
+  Duration _positionAtLeave = Duration.zero;
+  int? _videoControllerVideoId;
 
   // ── Продолжить с места остановки ────────────────────────────────────
   // Порог, ниже/выше которого не считаем нужным ни сохранять, ни
@@ -90,7 +123,10 @@ class PlaybackManager extends ChangeNotifier {
   DateTime? _sleepTimerEndsAt;
 
   bool get hasNext => playlist != null && currentIndex < playlist!.length - 1;
-  bool get isPlaying => controller?.value.isPlaying ?? false;
+  bool get isPlaying => _audioActive
+      ? ((_audio?.playing ?? false) &&
+          _audio?.processingState != ProcessingState.completed)
+      : (controller?.value.isPlaying ?? false);
 
   bool get isLoopActive => activeRange != null || adhocLoop;
   Duration get effectiveStart =>
@@ -99,10 +135,25 @@ class PlaybackManager extends ChangeNotifier {
       activeRange?.end ?? adhocEnd ?? (controller?.value.duration ?? Duration.zero);
   String get endBehavior => activeRange?.endBehavior ?? 'loop';
 
-  Future<void> loadAndPlay(Video video, {List<Video>? playlist, int? index}) async {
-    if (currentVideo?.id == video.id && controller != null && !hasError) {
+  /// [startAt]/[autoPlay]/[force] нужны только при возврате из фонового звука
+  /// (см. _returnToVideo): создать видео-плеер заново с места, где остановился звук.
+  Future<void> loadAndPlay(Video video, {
+    List<Video>? playlist,
+    int? index,
+    Duration? startAt,
+    bool autoPlay = true,
+    bool force = false,
+  }) async {
+    if (!force && currentVideo?.id == video.id && controller != null && !hasError) {
       isMinimized = false;
       notifyListeners();
+      return;
+    }
+
+    // Сейчас звук ведёт аудио-движок (приложение в фоне) — следующий ролик
+    // тоже грузим в него, не трогая видео-плеер.
+    if (_audioActive && !force) {
+      await _loadInAudioEngine(video, playlist: playlist, index: index);
       return;
     }
 
@@ -125,6 +176,8 @@ class PlaybackManager extends ChangeNotifier {
 
     controller = VideoPlayerController.file(file);
     await controller!.initialize();
+    await controller!.setVolume(volume);
+    _videoControllerVideoId = video.id;
     controller!.addListener(_onTick);
 
     activeRange = await _db.getDefaultRange(video.id!);
@@ -146,7 +199,10 @@ class PlaybackManager extends ChangeNotifier {
         : Duration(milliseconds: video.lastPositionMs);
     final hasSavedPosition = saved > _resumeThreshold && saved < dur - _resumeThreshold;
 
-    if (activeRange != null && hasSavedPosition) {
+    if (startAt != null) {
+      // Возврат из фонового звука: продолжаем ровно с места, где остановился звук.
+      await controller!.seekTo(startAt);
+    } else if (activeRange != null && hasSavedPosition) {
       // И диапазон, и сохранённая позиция — не решаем молча, спрашиваем
       // пользователя (см. PlayerScreen). Пока не спросили — диапазон как
       // безопасный дефолт (уже подразумевает осознанный выбор пользователя).
@@ -163,10 +219,21 @@ class PlaybackManager extends ChangeNotifier {
 
     chewieController = ChewieController(
       videoPlayerController: controller!,
-      autoPlay: true,
+      autoPlay: autoPlay,
       looping: false,
       allowFullScreen: true,
       allowMuting: true,
+      // Пункт «Громкость» в меню ⋮ плеера — работает и в полноэкранном режиме,
+      // где наш обычный ползунок под видео не виден (там только вкл/выкл звука).
+      additionalOptions: (context) => <OptionItem>[
+        OptionItem(
+          // Параметр необязательный: в разных версиях chewie onTap либо без
+          // аргументов, либо получает BuildContext — так подходит и то, и другое.
+          onTap: ([BuildContext? ctx]) => showVolumeDialog(ctx),
+          iconData: Icons.volume_up,
+          title: 'Громкость',
+        ),
+      ],
       showControlsOnInitialize: true,
       materialProgressColors: ChewieProgressColors(
         playedColor: const Color(0xFF7C5CFC),
@@ -183,13 +250,23 @@ class PlaybackManager extends ChangeNotifier {
 
   void _onTick() {
     final ctrl = controller;
-    if (ctrl == null || !ctrl.value.isInitialized) return;
-    final pos = ctrl.value.position;
-    final dur = ctrl.value.duration;
+    if (_audioActive || ctrl == null || !ctrl.value.isInitialized) return;
+    // Системная кнопка mute в chewie меняет громкость контроллера — держим
+    // ползунок в соответствии с ней.
+    if (ctrl.value.volume != volume) volume = ctrl.value.volume;
+    _tick(ctrl.value.position, ctrl.value.duration, ctrl.value.isPlaying,
+        seek: (d) => ctrl.seekTo(d), play: () => ctrl.play());
+  }
 
+  /// Один и тот же разбор позиции для видео-плеера и фонового аудио-движка:
+  /// пропуски, диапазон повтора, конец видео → следующее.
+  void _tick(Duration pos, Duration dur, bool playing, {
+    required Future<void> Function(Duration) seek,
+    required Future<void> Function() play,
+  }) {
     // Пропуск обрабатываем ДО логики диапазона/конца видео: если сейчас
     // перемотали, остальное в этот тик не нужно — позиция уже другая.
-    if (_applySkips(ctrl, pos, dur)) {
+    if (_applySkips(seek, pos, dur)) {
       notifyListeners();
       return;
     }
@@ -206,8 +283,8 @@ class PlaybackManager extends ChangeNotifier {
           // без диапазона повтора).
           playFirst();
         } else {
-          ctrl.seekTo(effectiveStart);
-          if (!ctrl.value.isPlaying) ctrl.play();
+          seek(effectiveStart);
+          if (!playing) play();
         }
       }
       return;
@@ -215,7 +292,7 @@ class PlaybackManager extends ChangeNotifier {
 
     if (!_endHandled && dur > Duration.zero &&
         pos >= dur - const Duration(milliseconds: 300) &&
-        !ctrl.value.isPlaying) {
+        !playing) {
       _endHandled = true;
       // Досмотрено до конца — сохранённая позиция теряет смысл (нечего
       // "продолжать"), сбрасываем её, а не оставляем зависшей у самого
@@ -242,7 +319,7 @@ class PlaybackManager extends ChangeNotifier {
   /// Если позиция попала в пропуск — перематывает на его конец. Возвращает
   /// true, если перемотка была. Соседние/пересекающиеся пропуски склеиваются
   /// (перематываем сразу за последний из цепочки).
-  bool _applySkips(VideoPlayerController ctrl, Duration pos, Duration dur) {
+  bool _applySkips(Future<void> Function(Duration) seek, Duration pos, Duration dur) {
     if (!skipsEnabled || skips.isEmpty) return false;
     // Пауза после прошлого пропуска — чтобы не зациклиться, пока перемотка
     // ещё не отразилась в position.
@@ -273,7 +350,7 @@ class PlaybackManager extends ChangeNotifier {
     // Пропуск до самого конца — не уходим за длительность, иначе плеер
     // может не отработать завершение видео штатно.
     final safeEnd = dur - const Duration(milliseconds: 200);
-    ctrl.seekTo(to >= dur && safeEnd > Duration.zero ? safeEnd : to);
+    seek(to >= dur && safeEnd > Duration.zero ? safeEnd : to);
     return true;
   }
 
@@ -352,6 +429,7 @@ class PlaybackManager extends ChangeNotifier {
     await loadAndPlay(next, playlist: playlist, index: currentIndex);
     if (wasBackgroundAudio) {
       isBackgroundAudio = true;
+      _preparing = _prepareAudio(next);
       await PipService.instance.updateBackgroundNotification(
           title: next.title, isPlaying: true);
     }
@@ -370,6 +448,7 @@ class PlaybackManager extends ChangeNotifier {
     await loadAndPlay(first, playlist: playlist, index: 0);
     if (wasBackgroundAudio) {
       isBackgroundAudio = true;
+      _preparing = _prepareAudio(first);
       await PipService.instance.updateBackgroundNotification(
           title: first.title, isPlaying: true);
     }
@@ -380,6 +459,22 @@ class PlaybackManager extends ChangeNotifier {
   }
 
   void togglePlayPause() {
+    if (_audioActive) {
+      final audio = _audio;
+      if (audio == null) return;
+      if (audio.playing) {
+        audio.pause();
+        final video = currentVideo;
+        if (!SettingsService.instance.isMusicMode && video?.id != null) {
+          _db.updateLastPosition(video!.id!, audio.position.inMilliseconds);
+        }
+      } else {
+        audio.play();
+      }
+      notifyListeners();
+      _syncPipState();
+      return;
+    }
     if (controller == null) return;
     if (controller!.value.isPlaying) {
       controller!.pause();
@@ -414,6 +509,14 @@ class PlaybackManager extends ChangeNotifier {
   }
 
   void skipForward(Duration amount) {
+    if (_audioActive) {
+      final audio = _audio;
+      if (audio == null) return;
+      final dur = audio.duration ?? Duration.zero;
+      final target = audio.position + amount;
+      audio.seek(dur > Duration.zero && target > dur ? dur : target);
+      return;
+    }
     final ctrl = controller;
     if (ctrl == null) return;
     final target = ctrl.value.position + amount;
@@ -485,6 +588,7 @@ class PlaybackManager extends ChangeNotifier {
     if (controller == null || currentVideo == null) return;
     isBackgroundAudio = true;
     isMinimized = false; // мини-окно не нужно — работаем полностью в фоне
+    _preparing = _prepareAudio(currentVideo!);
     notifyListeners();
     await PipService.instance.startBackgroundPlayback(
       title: currentVideo!.title,
@@ -519,6 +623,7 @@ class PlaybackManager extends ChangeNotifier {
       }
     }
     cancelSleepTimer();
+    await _stopAudioEngine();
     skips = [];
     pendingSkipStart = null;
     controller?.removeListener(_onTick);
@@ -526,6 +631,7 @@ class PlaybackManager extends ChangeNotifier {
     await controller?.dispose();
     controller = null;
     chewieController = null;
+    _videoControllerVideoId = null;
     currentVideo = null;
     playlist = null;
     currentIndex = 0;
@@ -538,6 +644,250 @@ class PlaybackManager extends ChangeNotifier {
     if (_wakelockOn) {
       _wakelockOn = false;
       await WakelockPlus.disable();
+    }
+  }
+
+  // ── Громкость ────────────────────────────────────────────────────────
+
+  void setVolume(double v) {
+    volume = v.clamp(0.0, 1.0).toDouble();
+    controller?.setVolume(volume);
+    _audio?.setVolume(volume);
+    notifyListeners();
+  }
+
+  // ── Фоновый звук: передача между video_player и just_audio ───────────
+
+  /// Пользователь уходит из приложения (Домой / недавние). Передаём звук
+  /// аудиоплееру сразу, пока видео-плеер ещё играет: плагин остановит его
+  /// только когда окно полностью закроется.
+  void _onUserLeaveHint() {
+    if (!isBackgroundAudio || _audioActive) return;
+    final ctrl = controller;
+    if (ctrl != null && ctrl.value.isInitialized) {
+      _playingAtLeave = ctrl.value.isPlaying;
+      _positionAtLeave = ctrl.value.position;
+      _leaveWatch = Stopwatch()..start();
+    }
+    _switchToAudioEngine();
+  }
+
+  void _onPipChanged(bool inPip) {
+    if (inPip && _audioActive) _returnToVideo();
+  }
+
+  void _onLifecycle(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.inactive:
+        // Запоминаем состояние ДО того, как плагин успеет остановить плеер.
+        final ctrl = controller;
+        if (!_audioActive && ctrl != null && ctrl.value.isInitialized) {
+          _playingAtLeave = ctrl.value.isPlaying;
+          _positionAtLeave = ctrl.value.position;
+          _leaveWatch = Stopwatch()..start();
+        }
+        // Заранее открываем файл в аудиоплеере (обычно к моменту hidden/paused уже готов).
+        if (isBackgroundAudio && !_audioActive && currentVideo != null) {
+          _preparing = _prepareAudio(currentVideo!);
+        }
+        break;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        _switchToAudioEngine();
+        break;
+      case AppLifecycleState.resumed:
+        _returnToVideo();
+        break;
+      case AppLifecycleState.detached:
+        break;
+    }
+  }
+
+  /// Приложение свернули при включённом «звук в фоне»: звук ведёт аудиоплеер.
+  Future<void> _switchToAudioEngine() async {
+    if (!isBackgroundAudio || _audioActive || _audioSwitching) return;
+    final video = currentVideo;
+    final ctrl = controller;
+    if (video == null || ctrl == null || !ctrl.value.isInitialized) return;
+    final playing = _playingAtLeave || ctrl.value.isPlaying;
+    var pos = ctrl.value.position;
+    if (_positionAtLeave > pos) pos = _positionAtLeave;
+    // Нет сигнала userLeaveHint (его таймер не запускали) — компенсировать нечего.
+    if (_leaveWatch == null) _leaveWatch = Stopwatch()..start();
+    _audioSwitching = true;
+    try {
+      final audio = _audio ??= AudioPlayer();
+      await _audioPosSub?.cancel();
+      await _audioStateSub?.cancel();
+      // Файл обычно уже открыт заранее (_prepareAudio) — тогда остаётся только
+      // перемотать и включить, и «дырка» в звуке почти незаметна.
+      await _preparing;
+      if (_preparedAudioVideoId != video.id) {
+        await audio.setFilePath(video.filePath);
+        _preparedAudioVideoId = video.id;
+      }
+      await audio.setVolume(volume);
+      // Пока готовили аудиоплеер, видео уже ушло вперёд — догоняем (иначе при
+      // перекрытии был бы слышен эхо-сдвиг). Если видео на паузе — позицию не трогаем.
+      var target = pos;
+      if (playing) {
+        target += (_leaveWatch?.elapsed ?? Duration.zero) + const Duration(milliseconds: 90);
+        _leaveWatch = null; // одноразовая поправка — иначе при следующем сворачивании накопится лишнее
+        final dur = audio.duration;
+        if (dur != null && target > dur) target = dur;
+      }
+      await audio.seek(target);
+      _audioActive = true;
+      _audioPosSub = audio.positionStream.listen(_onAudioTick);
+      _audioStateSub = audio.playerStateStream.listen((_) => _onAudioTick(audio.position));
+      if (playing) {
+        audio.play(); // Future завершается только по окончании — не ждём
+        // Короткое перекрытие вместо провала: видео замолкает, только когда
+        // аудиоплеер уже заиграл (на глаз/слух это ~150 мс одного и того же звука).
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
+      await ctrl.setVolume(0);
+      await ctrl.pause();
+    } catch (_) {
+      // Не вышло запустить аудио-движок — остаёмся на video_player как раньше.
+      _audioActive = false;
+    } finally {
+      _audioSwitching = false;
+    }
+    notifyListeners();
+  }
+
+  void _onAudioTick(Duration pos) {
+    final audio = _audio;
+    if (!_audioActive || _audioSwitching || audio == null) return;
+    final dur = audio.duration ?? controller?.value.duration ?? Duration.zero;
+    final completed = audio.processingState == ProcessingState.completed;
+    final playing = audio.playing && !completed;
+    _tick(pos, dur, playing,
+        seek: (d) => audio.seek(d),
+        play: () async { audio.play(); });
+  }
+
+  /// Следующий ролик, пока приложение в фоне: грузим его в аудио-движок
+  /// (видео-плеер без поверхности всё равно не заиграет).
+  Future<void> _loadInAudioEngine(Video video, {List<Video>? playlist, int? index}) async {
+    final audio = _audio;
+    if (audio == null) return;
+    _audioSwitching = true;
+    try {
+      final file = File(video.filePath);
+      if (!await file.exists()) return;
+      // Видео-плеер от предыдущего ролика больше не нужен.
+      controller?.removeListener(_onTick);
+      chewieController?.dispose();
+      await controller?.dispose();
+      controller = null;
+      chewieController = null;
+      _videoControllerVideoId = null;
+
+      currentVideo = video;
+      this.playlist = playlist;
+      currentIndex = index ?? 0;
+      activeRange = video.id == null ? null : await _db.getDefaultRange(video.id!);
+      skips = video.id == null ? [] : await _db.getSkipsForVideo(video.id!);
+      pendingSkipStart = null;
+      _lastSkipAt = null;
+      adhocLoop = false;
+      adhocStart = null;
+      adhocEnd = null;
+      _endHandled = false;
+      pendingResumeChoice = null;
+
+      await audio.setFilePath(video.filePath);
+      _preparedAudioVideoId = video.id;
+      final dur = audio.duration ?? Duration.zero;
+      final saved = SettingsService.instance.isMusicMode
+          ? Duration.zero
+          : Duration(milliseconds: video.lastPositionMs);
+      var start = Duration.zero;
+      if (activeRange != null) {
+        start = activeRange!.start;
+      } else if (saved > _resumeThreshold && saved < dur - _resumeThreshold) {
+        start = saved;
+      }
+      await audio.seek(start);
+      audio.play();
+      notifyListeners();
+      _syncPipState();
+    } catch (_) {
+      hasError = true;
+    } finally {
+      _audioSwitching = false;
+    }
+  }
+
+  /// Вернулись в приложение: звук передаём обратно видео-плееру с того же места.
+  Future<void> _returnToVideo() async {
+    // Вернулись, пока звук ещё передавался аудиоплееру — дожидаемся конца передачи,
+    // иначе она завершилась бы уже после возврата и оставила приложение немым.
+    for (var i = 0; i < 40 && _audioSwitching; i++) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+    if (!_audioActive) return;
+    final audio = _audio;
+    final video = currentVideo;
+    final pos = audio?.position ?? Duration.zero;
+    final playing = (audio?.playing ?? false) &&
+        audio?.processingState != ProcessingState.completed;
+    final keepBackgroundAudio = isBackgroundAudio;
+    await _stopAudioEngine(keepPrepared: true);
+    if (video == null) return;
+
+    final ctrl = controller;
+    if (ctrl != null && _videoControllerVideoId == video.id && ctrl.value.isInitialized) {
+      await ctrl.setVolume(volume); // в фоне видео-плеер был заглушен
+      await ctrl.seekTo(pos);
+      if (playing) {
+        await ctrl.play();
+      } else {
+        await ctrl.pause();
+      }
+      notifyListeners();
+      return;
+    }
+    // Ролик сменился, пока играл только звук — видео-плеер создаём заново.
+    await loadAndPlay(video,
+        playlist: playlist, index: currentIndex,
+        startAt: pos, autoPlay: playing, force: true);
+    isBackgroundAudio = keepBackgroundAudio;
+    notifyListeners();
+  }
+
+  /// [keepPrepared] — при возврате из фона оставляем файл открытым (просто пауза),
+  /// чтобы следующее сворачивание снова было без заметной «дырки». Если видео
+  /// закрывают или сменили — полная остановка.
+  Future<void> _stopAudioEngine({bool keepPrepared = false}) async {
+    _audioActive = false;
+    await _audioPosSub?.cancel();
+    await _audioStateSub?.cancel();
+    _audioPosSub = null;
+    _audioStateSub = null;
+    try {
+      if (keepPrepared) {
+        await _audio?.pause();
+      } else {
+        _preparedAudioVideoId = null;
+        await _audio?.stop();
+      }
+    } catch (_) {}
+  }
+
+  /// Открывает файл [video] в аудиоплеере заранее (без воспроизведения).
+  Future<void> _prepareAudio(Video video) async {
+    if (_preparedAudioVideoId == video.id || _audioActive) return;
+    try {
+      final audio = _audio ??= AudioPlayer();
+      _preparedAudioVideoId = null;
+      await audio.setFilePath(video.filePath);
+      await audio.setVolume(volume);
+      _preparedAudioVideoId = video.id;
+    } catch (_) {
+      _preparedAudioVideoId = null;
     }
   }
 
@@ -557,6 +907,7 @@ class PlaybackManager extends ChangeNotifier {
       final remaining = endsAt.difference(DateTime.now());
       if (remaining <= Duration.zero) {
         controller?.pause();
+        _audio?.pause();
         cancelSleepTimer();
         notifyListeners();
       } else {
@@ -572,4 +923,14 @@ class PlaybackManager extends ChangeNotifier {
     _sleepTimerEndsAt = null;
     sleepTimerRemaining = null;
   }
+}
+
+/// Передаёт события жизненного цикла приложения менеджеру (WidgetsBindingObserver
+/// нельзя подмешать в ChangeNotifier-синглтон напрямую без лишних зависимостей).
+class _LifecycleBridge with WidgetsBindingObserver {
+  final PlaybackManager _manager;
+  _LifecycleBridge(this._manager);
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) => _manager._onLifecycle(state);
 }
