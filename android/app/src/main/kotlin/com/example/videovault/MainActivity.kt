@@ -72,6 +72,14 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // yt-dlp на телефоне (экспериментально): отдельный канал, см. YtDlpBridge.kt
+        val ytdlpChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.videovault/ytdlp")
+        ytdlpChannel.setMethodCallHandler(YtDlpBridge(applicationContext, ytdlpChannel))
+
+        // Установка скачанного обновления приложения, см. AppUpdater.kt
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.videovault/updater")
+            .setMethodCallHandler(AppUpdater(this))
+
         if (!receiverRegistered) {
             val filter = IntentFilter().apply {
                 addAction(ACTION_PLAY_PAUSE_BROADCAST)
@@ -256,6 +264,11 @@ class MainActivity : FlutterActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        // Самый ранний и точный сигнал «пользователь сам уходит из приложения»
+        // (Домой / недавние). В отличие от жизненного цикла Flutter не срабатывает
+        // от шторки уведомлений и диалогов. Нужен, чтобы звук в фоне передался
+        // аудиоплееру ДО того, как плагин видео остановит воспроизведение.
+        pipChannel?.invokeMethod("userLeaveHint", null)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             if (shouldAutoEnterPip) {

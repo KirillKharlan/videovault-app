@@ -1,20 +1,26 @@
-# VideoVault — Flutter App
+# VideoVault — Flutter-приложение
 
-Мобильное приложение для скачивания и просмотра видео офлайн.
-Общается с бэкендом на Render.com через REST API.
+Android-приложение для скачивания видео по ссылке и просмотра их офлайн в своей библиотеке.
+Работает с бэкендом `videovault-backend` (Flask + yt-dlp на Render) через REST API.
 
----
+Подробности: `PROJECT_MAP_APP.md` (карта кода), `claude/claude.md` (контекст и договорённости).
 
-## Установка Flutter (Windows)
+## Возможности
 
-1. Скачай Flutter SDK: https://docs.flutter.dev/get-started/install/windows
-2. Распакуй в `C:\flutter`
-3. Добавь `C:\flutter\bin` в PATH
-4. Проверь: `flutter doctor`
-
----
+- Скачивание по ссылке (YouTube, TikTok, Instagram и др.), выбор качества или только аудио, очередь загрузок.
+- Приём ссылок через «Поделиться» из других приложений.
+- Библиотека: поиск, альбомы (видео может быть в нескольких), импорт из галереи, переименование, своя обложка.
+- Плеер: продолжение с места остановки, повтор диапазонов, пропуски, таймер сна, фоновый звук, PiP.
+- Экспорт: сохранение в галерею, обрезка, конвертация в MP3, «Поделиться».
+- Режим «Видео / Музыка» в настройках.
+- Скачивание на телефоне встроенным yt-dlp (обновляется само), выбор качества перед загрузкой.
 
 ## Сборка APK
+
+Основной способ — GitHub Actions (`.github/workflows/build.yml`): push в `master` или ручной запуск,
+APK появляется артефактом `VideoVault-APK`.
+
+Локально (Windows, нужен Flutter SDK и `flutter doctor` без ошибок):
 
 ```cmd
 cd videovault-app
@@ -22,39 +28,22 @@ flutter pub get
 flutter build apk --release
 ```
 
-APK: `build\app\outputs\flutter-apk\app-release.apk`
+APK: `build\app\outputs\flutter-apk\app-release.apk`. Установка: `flutter install` или
+`adb install build\app\outputs\flutter-apk\app-release.apk`.
 
----
+Подпись берётся из `android/keystore/videovault.keystore` (лежит в репозитории намеренно, чтобы сборки
+ставились поверх друг друга).
 
-## Установка на телефон (через USB)
+## Обновление из приложения
 
-```cmd
-flutter install
-```
+После каждой удачной сборки в GitHub Actions публикуется релиз с APK. В приложении: Настройки → «Обновление приложения» →
+«Проверить обновления» → «Скачать и установить» (при запуске приложение тоже само подсказывает о новой сборке). При первой
+установке Android попросит разрешить установку из этого приложения. Работает для публичного репозитория и только в сборках
+из CI; первую сборку с этой функцией нужно поставить вручную.
 
-или через adb:
-```cmd
-adb install build\app\outputs\flutter-apk\app-release.apk
-```
+## Скачивание
 
----
-
-## Важно: поменяй URL бэкенда
-
-В файле `lib/api/api_client.dart` замени:
-```dart
-static const String baseUrl = 'https://videovault-api.onrender.com';
-```
-на свой URL с Render.
-
----
-
-## Как деплоить бэкенд на Render
-
-1. Залей папку `videovault-backend` на GitHub
-2. Зайди на render.com → New Web Service
-3. Выбери репозиторий
-4. Build command: `pip install -r requirements.txt`
-5. Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-6. Plan: Free
-7. Deploy → скопируй URL (например `https://videovault-api.onrender.com`)
+Видео скачиваются прямо на телефоне встроенным yt-dlp (youtubedl-android: Python + yt-dlp + ffmpeg), сервер не нужен. Поэтому APK большой,
+минимальная версия Android — 7.0 (API 24), архитектура — arm64. В Настройках есть кнопка «Проверить yt-dlp на телефоне» (версия движка или
+причина, почему он не запустился) и «Обновить yt-dlp»; сам он обновляется при каждом входе в приложение. Во время скачивания держите приложение
+открытым.
