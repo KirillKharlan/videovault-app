@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
+import 'download_foreground.dart';
 import 'download_service.dart';
 
 enum DownloadJobStatus { queued, downloading, error }
@@ -19,6 +20,8 @@ class DownloadJob {
   String? albumName;
 
   VideoInfo? info;
+  /// Имя файлов yt-dlp этой загрузки (l<мс>): повтор с тем же id докачивает недокачанное.
+  String? localId;
   DownloadJobStatus status = DownloadJobStatus.queued;
   double progress = 0;
   String statusText = '';
@@ -48,7 +51,10 @@ class DownloadJob {
 /// параллельные тяжёлые загрузки), остальные ждут своей очереди. Живёт вне
 /// экранов — прогресс виден отовсюду, а уйти с экрана можно в любой момент.
 class DownloadManager extends ChangeNotifier {
-  DownloadManager._();
+  DownloadManager._() {
+    // Кнопка «Отменить» в уведомлении foreground-сервиса.
+    DownloadForeground.onCancel = cancelActive;
+  }
   static final instance = DownloadManager._();
 
   final _service = DownloadService();
@@ -154,12 +160,20 @@ class DownloadManager extends ChangeNotifier {
         customTitle: job.customTitle,
         info: job.info,
         infoFuture: job.infoFuture,
+        resumeId: job.localId,
+        onStarted: (id) => job.localId = id,
         onProgress: (p, step) {
           job.progress = p;
           job.statusText = step;
           notifyListeners();
         },
       );
+    } on DownloadCancelled {
+      // Отмена пользователя — не ошибка: загрузка просто исчезает из очереди.
+      jobs.remove(job);
+      _pruneLoneError();
+      notifyListeners();
+      return;
     } catch (e) {
       job.status = DownloadJobStatus.error;
       job.error = e.toString();
@@ -203,10 +217,20 @@ class DownloadManager extends ChangeNotifier {
     _pump();
   }
 
-  /// Убрать из очереди ожидающую или упавшую загрузку. Уже идущую остановить
-  /// нельзя — сервер продолжает работу, отмены в API нет.
+  /// Остановить идущую загрузку (процесс yt-dlp). Недокачанные файлы удаляются,
+  /// загрузка пропадает из очереди; остальные продолжают по порядку.
+  Future<void> cancelActive() async {
+    if (activeJob == null) return;
+    await _service.cancelCurrent();
+  }
+
+  /// Убрать из очереди ожидающую или упавшую загрузку (у упавшей заодно
+  /// удаляются недокачанные файлы). Идущую останавливает [cancelActive].
   void remove(DownloadJob job) {
     if (job.isActive) return;
+    if (job.status == DownloadJobStatus.error) {
+      _service.discardParts(job.localId);
+    }
     jobs.remove(job);
     _pruneLoneError();
     notifyListeners();

@@ -100,9 +100,18 @@ class VideoCard extends StatelessWidget {
           // Title
           Padding(
             padding: const EdgeInsets.all(8),
-            child: Text(video.title,
-                maxLines: 2, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: Colors.white)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(video.title,
+                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: Colors.white)),
+              if (video.uploader != null && video.uploader!.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(video.uploader!,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 10, color: Colors.white38)),
+                ),
+            ]),
           ),
         ]),
       ),

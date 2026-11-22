@@ -117,13 +117,15 @@ class _JobCard extends StatelessWidget {
               _status(purple),
             ]),
           ),
-          if (!job.isActive)
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              tooltip: 'Убрать из очереди',
-              icon: const Icon(Icons.close, size: 18, color: Colors.white54),
-              onPressed: () => DownloadManager.instance.remove(job),
-            ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            tooltip: job.isActive ? 'Отменить загрузку' : 'Убрать из очереди',
+            icon: Icon(job.isActive ? Icons.stop_circle_outlined : Icons.close,
+                size: 18, color: job.isActive ? Colors.redAccent : Colors.white54),
+            onPressed: () => job.isActive
+                ? DownloadManager.instance.cancelActive()
+                : DownloadManager.instance.remove(job),
+          ),
         ]),
         const SizedBox(height: 8),
         InkWell(

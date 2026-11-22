@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'app_navigator.dart';
 import 'screens/home_screen.dart';
+import 'models/album_style.dart';
+import 'models/database.dart';
 import 'screens/albums_screen.dart';
 import 'screens/download_screen.dart';
 import 'screens/download_queue_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/download_manager.dart';
+import 'services/local_ytdlp_service.dart';
 import 'services/settings_service.dart';
+import 'services/update_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,6 +30,7 @@ class VideoVaultApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: appNavigatorKey,
       title: 'VideoVault',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(),
@@ -112,14 +118,105 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _index = 0;
   String? _sharedUrl;
+
+  /// Открытый альбом: пока он не null, между Albums и Download есть вкладка с
+  /// его названием. Вкладка живёт, пока её не закроют крестиком: можно уйти на
+  /// другие вкладки и вернуться — список, прокрутка и выбор сохраняются.
+  Album? _openAlbum;
 
   @override
   void initState() {
     super.initState();
     _listenForSharedUrls();
+    _checkForUpdateOnStart();
+    _updateYtDlpInBackground();
+    DBChangeNotifier.instance.addListener(_refreshOpenAlbum);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    DBChangeNotifier.instance.removeListener(_refreshOpenAlbum);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  void _openAlbumTab(Album album) {
+    setState(() { _openAlbum = album; _index = _albumPage; });
+  }
+
+  void _closeAlbumTab() {
+    setState(() { _openAlbum = null; _index = 1; });
+  }
+
+  /// Альбом переименовали или удалили, пока его вкладка открыта: обновляем
+  /// название в меню либо закрываем вкладку.
+  Future<void> _refreshOpenAlbum() async {
+    final open = _openAlbum;
+    if (open == null || open.id == null) return;
+    final albums = await AppDatabase().getAlbums();
+    if (!mounted || _openAlbum?.id != open.id) return;
+    final match = albums.where((a) => a.id == open.id);
+    if (match.isEmpty) {
+      setState(() {
+        _openAlbum = null;
+        if (_index == _albumPage) _index = 1;
+      });
+    } else if (match.first.name != open.name ||
+        match.first.icon != open.icon ||
+        match.first.color != open.color) {
+      setState(() => _openAlbum = match.first);
+    }
+  }
+
+  /// Название для нижнего меню: коротко, чтобы шесть вкладок помещались.
+  static String _shortName(String name) =>
+      name.length <= 9 ? name : '${name.substring(0, 8)}…';
+
+  /// Каждый вход в приложение (возврат из фона) — снова проверяем yt-dlp.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _updateYtDlpInBackground();
+  }
+
+  /// При КАЖДОМ входе в приложение тихо обновляем встроенный yt-dlp (иначе YouTube быстро перестаёт работать).
+  /// Если версия поменялась — коротко сообщаем.
+  Future<void> _updateYtDlpInBackground() async {
+    await Future.delayed(const Duration(seconds: 3));
+    final result = await LocalYtdlpService.instance.autoUpdate(
+      isBusy: () => DownloadManager.instance.isDownloading,
+    );
+    final looksLikeVersion = RegExp(r'^\d{4}\.\d{2}\.\d{2}');
+    if (result == null || !mounted) return;
+    if (!looksLikeVersion.hasMatch(result.after)) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('yt-dlp обновлён до ${result.after}'),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  /// Один раз за запуск тихо смотрим, нет ли новой сборки; если есть —
+  /// предлагаем открыть Настройки (там скачивание и установка).
+  Future<void> _checkForUpdateOnStart() async {
+    if (!UpdateService.enabled) return;
+    await Future.delayed(const Duration(seconds: 3));
+    final updates = UpdateService.instance;
+    await updates.check();
+    final info = updates.available;
+    if (!mounted || info == null || updates.status != UpdateStatus.available) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Доступна новая сборка #${info.build}'),
+      duration: const Duration(seconds: 10),
+      action: SnackBarAction(
+        label: 'Обновить',
+        onPressed: () {
+          if (mounted) setState(() => _index = 4);
+        },
+      ),
+    ));
   }
 
   // Принимаем ссылки из YouTube/TikTok/Instagram через "Поделиться"
@@ -140,10 +237,12 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // Страницы IndexedStack фиксированы: 0 Videos, 1 Albums, 2 Download,
-  // 3 Queue, 4 Settings. Вкладка "Queue" в нижнем меню видна, только когда
-  // в очереди 2+ загрузок (DownloadManager.showQueueTab) — тогда индексы
-  // меню и страниц совпадают, иначе всё после Download сдвигается на единицу.
+  // 3 Queue, 4 Settings, 5 Album (открытый альбом). В нижнем меню порядок
+  // другой: Videos, Albums, [Album], Download, [Queue], Settings — вкладки
+  // Album и Queue видны не всегда, поэтому соответствие меню ↔ страницы
+  // строится списком `order` в build().
   static const _queuePage = 3;
+  static const _albumPage = 5;
 
   @override
   Widget build(BuildContext context) {
@@ -153,15 +252,22 @@ class _MainScreenState extends State<MainScreen> {
         final mgr = DownloadManager.instance;
         final queueVisible = mgr.showQueueTab;
 
+        final albumVisible = _openAlbum != null;
+
         // Вкладка очереди пропала, пока мы на ней — переходим на Download.
         if (!queueVisible && _index == _queuePage) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted && _index == _queuePage) setState(() => _index = 2);
           });
         }
-        final page = (!queueVisible && _index == _queuePage) ? 2 : _index;
-        int toDisplay(int real) => queueVisible ? real : (real > _queuePage ? real - 1 : real);
-        int toReal(int display) => queueVisible ? display : (display >= _queuePage ? display + 1 : display);
+        var page = _index;
+        if (!queueVisible && page == _queuePage) page = 2;
+        if (!albumVisible && page == _albumPage) page = 1;
+
+        // Страницы в порядке нижнего меню.
+        final order = <int>[0, 1, if (albumVisible) _albumPage, 2, if (queueVisible) _queuePage, 4];
+        int toDisplay(int real) => order.indexOf(real).clamp(0, order.length - 1).toInt();
+        int toReal(int display) => order[display.clamp(0, order.length - 1).toInt()];
 
         return Scaffold(
           body: Column(
@@ -171,13 +277,23 @@ class _MainScreenState extends State<MainScreen> {
                   index: page,
                   children: [
                     const HomeScreen(),
-                    const AlbumsScreen(),
+                    AlbumsScreen(onOpenAlbum: _openAlbumTab),
                     DownloadScreen(
                       initialUrl: _sharedUrl,
                       onUrlConsumed: () => setState(() => _sharedUrl = null),
                     ),
                     const DownloadQueueScreen(),
                     const SettingsScreen(),
+                    // Страница 5: открытый альбом. Ключ по id — при открытии
+                    // другого альбома состояние создаётся заново.
+                    _openAlbum == null
+                        ? const SizedBox.shrink()
+                        : AlbumDetailScreen(
+                            key: ValueKey('album-${_openAlbum!.id}'),
+                            album: _openAlbum!,
+                            onClose: _closeAlbumTab,
+                            isActive: page == _albumPage,
+                          ),
                   ],
                 ),
               ),
@@ -223,11 +339,23 @@ class _MainScreenState extends State<MainScreen> {
           bottomNavigationBar: NavigationBar(
             selectedIndex: toDisplay(page),
             onDestinationSelected: (d) => setState(() => _index = toReal(d)),
+            // Шесть вкладок (альбом + очередь): подписи только у выбранной.
+            labelBehavior: order.length > 5
+                ? NavigationDestinationLabelBehavior.onlyShowSelected
+                : NavigationDestinationLabelBehavior.alwaysShow,
             destinations: [
               const NavigationDestination(icon: Icon(Icons.video_library_outlined),
                   selectedIcon: Icon(Icons.video_library), label: 'Videos'),
               const NavigationDestination(icon: Icon(Icons.folder_outlined),
                   selectedIcon: Icon(Icons.folder), label: 'Albums'),
+              if (albumVisible)
+                NavigationDestination(
+                  icon: Icon(albumIconData(_openAlbum!.icon)),
+                  selectedIcon: Icon(albumIconData(_openAlbum!.icon),
+                      color: albumColor(_openAlbum!.color)),
+                  label: _shortName(_openAlbum!.name),
+                  tooltip: _openAlbum!.name,
+                ),
               const NavigationDestination(icon: Icon(Icons.download_outlined),
                   selectedIcon: Icon(Icons.download), label: 'Download'),
               if (queueVisible)
