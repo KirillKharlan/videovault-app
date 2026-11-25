@@ -33,7 +33,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final _mgr = PlaybackManager.instance;
 
   bool _showVolumeSlider = false;
-  double _volume = 1.0;
+  double get _volume => _mgr.volume;
   bool _pipSupported = false;
   bool _isInPip = false;
 
@@ -60,7 +60,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _startPlayback() async {
     await _mgr.loadAndPlay(widget.video, playlist: widget.playlist, index: widget.initialIndex);
-    _mgr.controller?.setVolume(_volume);
     await _loadRanges();
   }
 
@@ -739,7 +738,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Navigator.pop(context);
             final video = _mgr.currentVideo;
             if (video != null) {
-              showVideoActionsSheet(context, video, onChanged: () => setState(() {}));
+              showVideoActionsSheet(context, video,
+                  onChanged: () => setState(() {}), allowDelete: false);
             }
           },
         ),
@@ -1032,8 +1032,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     child: Slider(
                       value: _volume, min: 0, max: 1,
                       onChanged: (v) {
-                        setState(() => _volume = v);
-                        _mgr.controller?.setVolume(v);
+                        setState(() => _mgr.setVolume(v));
                       },
                     ),
                   ),

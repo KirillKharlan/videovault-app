@@ -2,18 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:cross_file/cross_file.dart';
 import '../models/database.dart';
+import '../services/video_delete_service.dart';
 import '../services/video_edit_service.dart';
 import 'safe_bottom_sheet.dart';
 import 'video_albums_dialog.dart';
 
 /// Меню действий по долгому нажатию на карточку видео: переименовать,
-/// сменить/сбросить обложку, поделиться файлом. Общее для главного экрана
-/// и экрана альбомов.
+/// сменить/сбросить обложку, поделиться файлом, удалить. Общее для главного
+/// экрана и экрана альбомов.
 Future<void> showVideoActionsSheet(
   BuildContext context,
   Video video, {
   required VoidCallback onChanged,
   VoidCallback? onSelect, // если задан — в меню появляется пункт "Выбрать"
+  // В плеере у видео уже есть своё «Удалить» (оно закрывает экран), поэтому
+  // там пункт отключают.
+  bool allowDelete = true,
 }) {
   final editor = VideoEditService();
 
@@ -92,6 +96,17 @@ Future<void> showVideoActionsSheet(
           },
         ),
       _LetterboxSwitch(video: video, editor: editor, onChanged: onChanged),
+      if (allowDelete)
+        ListTile(
+          leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+          title: const Text('Удалить', style: TextStyle(color: Colors.redAccent)),
+          subtitle: const Text('Файл будет удалён с устройства, видео пропадёт из всех альбомов',
+              style: TextStyle(fontSize: 11)),
+          onTap: () async {
+            Navigator.pop(sheetCtx);
+            await _confirmAndDelete(context, video, onChanged);
+          },
+        ),
     ]),
   );
 }
@@ -130,6 +145,28 @@ class _LetterboxSwitchState extends State<_LetterboxSwitch> {
       },
     );
   }
+}
+
+/// Подтверждение и полное удаление одного видео (файл, обложка, записи в БД).
+Future<void> _confirmAndDelete(BuildContext context, Video video, VoidCallback onChanged) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dialogCtx) => AlertDialog(
+      title: const Text('Удалить видео?'),
+      content: Text('«${video.title}»\n\nФайл будет удалён с устройства безвозвратно, '
+          'видео пропадёт и из всех альбомов.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialogCtx, false), child: const Text('Отмена')),
+        TextButton(
+          onPressed: () => Navigator.pop(dialogCtx, true),
+          child: const Text('Удалить', style: TextStyle(color: Colors.redAccent)),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  await deleteVideosCompletely([video]);
+  onChanged();
 }
 
 Future<void> _showRenameDialog(

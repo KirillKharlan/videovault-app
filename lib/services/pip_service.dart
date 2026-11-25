@@ -20,8 +20,10 @@ class PipService {
   // плеера кнопки в уведомлении перестанут работать.
   void Function()? onPlayPauseAction;
   void Function()? onSkipNextAction;
+  void Function()? onSkipPrevAction;
   void Function()? onForward10Action;
   void Function()? onStopAction;
+  void Function()? onUserLeaveHint;
 
   void addListener(void Function(bool isInPip) listener) {
     _listeners.add(listener);
@@ -51,11 +53,17 @@ class PipService {
       case 'pipAction_skipNext':
         onSkipNextAction?.call();
         break;
+      case 'pipAction_skipPrev':
+        onSkipPrevAction?.call();
+        break;
       case 'pipAction_forward10':
         onForward10Action?.call();
         break;
       case 'pipAction_stop':
         onStopAction?.call();
+        break;
+      case 'userLeaveHint':
+        onUserLeaveHint?.call();
         break;
     }
   }
@@ -89,25 +97,44 @@ class PipService {
 
   // ── Фоновое воспроизведение (foreground service + уведомление) ─────────
 
-  Future<void> startBackgroundPlayback({required String title, required bool isPlaying}) async {
+  // Последнее отправленное в уведомление: менеджер вызывает обновление на каждый
+  // тик позиции, а перерисовывать уведомление нужно только при реальных изменениях.
+  String? _lastBgSignature;
+
+  Future<void> startBackgroundPlayback({
+    required String title,
+    required bool isPlaying,
+    String? artPath,
+  }) async {
+    _lastBgSignature = '$title|$isPlaying|$artPath';
     try {
       await _channel.invokeMethod('startBackgroundService', {
         'title': title,
         'isPlaying': isPlaying,
+        'artPath': artPath,
       });
     } catch (_) {}
   }
 
-  Future<void> updateBackgroundNotification({required String title, required bool isPlaying}) async {
+  Future<void> updateBackgroundNotification({
+    required String title,
+    required bool isPlaying,
+    String? artPath,
+  }) async {
+    final signature = '$title|$isPlaying|$artPath';
+    if (signature == _lastBgSignature) return;
+    _lastBgSignature = signature;
     try {
       await _channel.invokeMethod('updateBackgroundNotification', {
         'title': title,
         'isPlaying': isPlaying,
+        'artPath': artPath,
       });
     } catch (_) {}
   }
 
   Future<void> stopBackgroundPlayback() async {
+    _lastBgSignature = null;
     try {
       await _channel.invokeMethod('stopBackgroundService');
     } catch (_) {}
