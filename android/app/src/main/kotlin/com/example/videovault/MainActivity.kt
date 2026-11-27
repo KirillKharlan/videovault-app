@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
         // BroadcastReceiver ниже обрабатывает оба источника одинаково.
         const val ACTION_PLAY_PAUSE_BROADCAST = "com.videovault.ACTION_PLAY_PAUSE"
         const val ACTION_SKIP_NEXT_BROADCAST = "com.videovault.ACTION_SKIP_NEXT"
+        const val ACTION_SKIP_PREV_BROADCAST = "com.videovault.ACTION_SKIP_PREV"
         const val ACTION_FORWARD_10_BROADCAST = "com.videovault.ACTION_FORWARD_10"
         const val ACTION_STOP_BROADCAST = "com.videovault.ACTION_STOP"
 
@@ -51,6 +52,7 @@ class MainActivity : FlutterActivity() {
     private var currentIsPlaying = true
     private var currentHasNext = false
     private var currentTitle = "VideoVault"
+    private var currentArtPath: String? = null // обложка для уведомления фонового звука
 
     private var receiverRegistered = false
     private val actionReceiver = object : BroadcastReceiver() {
@@ -58,6 +60,7 @@ class MainActivity : FlutterActivity() {
             when (intent?.action) {
                 ACTION_PLAY_PAUSE_BROADCAST -> pipChannel?.invokeMethod("pipAction_playPause", null)
                 ACTION_SKIP_NEXT_BROADCAST -> pipChannel?.invokeMethod("pipAction_skipNext", null)
+                ACTION_SKIP_PREV_BROADCAST -> pipChannel?.invokeMethod("pipAction_skipPrev", null)
                 ACTION_FORWARD_10_BROADCAST -> pipChannel?.invokeMethod("pipAction_forward10", null)
                 ACTION_STOP_BROADCAST -> {
                     pipChannel?.invokeMethod("pipAction_stop", null)
@@ -72,10 +75,23 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // yt-dlp на телефоне (экспериментально): отдельный канал, см. YtDlpBridge.kt
+        val ytdlpChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.videovault/ytdlp")
+        ytdlpChannel.setMethodCallHandler(YtDlpBridge(applicationContext, ytdlpChannel))
+
+        // Foreground-сервис скачивания (прогресс и «Отменить» в уведомлении), см. DownloadServiceBridge.kt
+        val dlChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.videovault/dlservice")
+        dlChannel.setMethodCallHandler(DownloadServiceBridge(applicationContext, dlChannel))
+
+        // Установка скачанного обновления приложения, см. AppUpdater.kt
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.videovault/updater")
+            .setMethodCallHandler(AppUpdater(this))
+
         if (!receiverRegistered) {
             val filter = IntentFilter().apply {
                 addAction(ACTION_PLAY_PAUSE_BROADCAST)
                 addAction(ACTION_SKIP_NEXT_BROADCAST)
+                addAction(ACTION_SKIP_PREV_BROADCAST)
                 addAction(ACTION_FORWARD_10_BROADCAST)
                 addAction(ACTION_STOP_BROADCAST)
             }
@@ -142,9 +158,11 @@ class MainActivity : FlutterActivity() {
                 "startBackgroundService" -> {
                     currentTitle = call.argument<String>("title") ?: currentTitle
                     currentIsPlaying = call.argument<Boolean>("isPlaying") ?: true
+                    currentArtPath = call.argument<String>("artPath")
                     val intent = Intent(this, BackgroundPlaybackService::class.java).apply {
                         putExtra(BackgroundPlaybackService.EXTRA_TITLE, currentTitle)
                         putExtra(BackgroundPlaybackService.EXTRA_IS_PLAYING, currentIsPlaying)
+                        putExtra(BackgroundPlaybackService.EXTRA_ART_PATH, currentArtPath)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         startForegroundService(intent)
@@ -162,9 +180,11 @@ class MainActivity : FlutterActivity() {
                 "updateBackgroundNotification" -> {
                     currentTitle = call.argument<String>("title") ?: currentTitle
                     currentIsPlaying = call.argument<Boolean>("isPlaying") ?: currentIsPlaying
+                    currentArtPath = call.argument<String>("artPath")
                     val intent = Intent(this, BackgroundPlaybackService::class.java).apply {
                         putExtra(BackgroundPlaybackService.EXTRA_TITLE, currentTitle)
                         putExtra(BackgroundPlaybackService.EXTRA_IS_PLAYING, currentIsPlaying)
+                        putExtra(BackgroundPlaybackService.EXTRA_ART_PATH, currentArtPath)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         startForegroundService(intent)
@@ -256,6 +276,11 @@ class MainActivity : FlutterActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        // Самый ранний и точный сигнал «пользователь сам уходит из приложения»
+        // (Домой / недавние). В отличие от жизненного цикла Flutter не срабатывает
+        // от шторки уведомлений и диалогов. Нужен, чтобы звук в фоне передался
+        // аудиоплееру ДО того, как плагин видео остановит воспроизведение.
+        pipChannel?.invokeMethod("userLeaveHint", null)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             if (shouldAutoEnterPip) {

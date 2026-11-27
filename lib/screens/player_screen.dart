@@ -33,7 +33,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final _mgr = PlaybackManager.instance;
 
   bool _showVolumeSlider = false;
-  double _volume = 1.0;
+  double get _volume => _mgr.volume;
   bool _pipSupported = false;
   bool _isInPip = false;
 
@@ -60,7 +60,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _startPlayback() async {
     await _mgr.loadAndPlay(widget.video, playlist: widget.playlist, index: widget.initialIndex);
-    _mgr.controller?.setVolume(_volume);
     await _loadRanges();
   }
 
@@ -687,6 +686,61 @@ class _PlayerScreenState extends State<PlayerScreen> {
     ));
   }
 
+  /// Главы видео: тап — перейти, значок справа — повторять главу по кругу
+  /// или сохранить её как диапазон повтора.
+  void _showChaptersSheet() {
+    final video = _mgr.currentVideo;
+    final chapters = video?.chapterList ?? const <VideoChapter>[];
+    if (video == null || chapters.isEmpty) return;
+    String stamp(double seconds) => _fmt(Duration(seconds: seconds.round()));
+    showSafeModalBottomSheet(
+      context: context,
+      builder: (sheetCtx) => Column(mainAxisSize: MainAxisSize.min, children: [
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text('Главы', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+        for (final c in chapters)
+          ListTile(
+            title: Text(c.title.isEmpty ? 'Без названия' : c.title,
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+            subtitle: Text('${stamp(c.start)} — ${stamp(c.end)}',
+                style: const TextStyle(fontSize: 11)),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _mgr.seekTo(Duration(milliseconds: (c.start * 1000).round()));
+            },
+            trailing: PopupMenuButton<String>(
+              icon: const Icon(Icons.repeat),
+              tooltip: 'Повтор главы',
+              onSelected: (action) async {
+                final start = Duration(milliseconds: (c.start * 1000).round());
+                final end = Duration(milliseconds: (c.end * 1000).round());
+                if (action == 'loop') {
+                  _mgr.setAdhocRange(start, end);
+                  await _mgr.seekTo(start);
+                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                } else if (action == 'save' && video.id != null) {
+                  await AppDatabase().createRange(RepeatRange(
+                    videoId: video.id!,
+                    label: c.title.isEmpty ? 'Глава' : c.title,
+                    startMs: start.inMilliseconds,
+                    endMs: end.inMilliseconds,
+                  ));
+                  await _loadRanges();
+                  _showSnack('Диапазон «${c.title}» сохранён');
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'loop', child: Text('Повторять эту главу')),
+                PopupMenuItem(value: 'save', child: Text('Сохранить как диапазон')),
+              ],
+            ),
+          ),
+      ]),
+    );
+  }
+
   void _showOptions() {
     showSafeModalBottomSheet(
       context: context,
@@ -707,6 +761,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
               style: TextStyle(fontSize: 11)),
           onTap: () { Navigator.pop(context); _enableBackgroundAudio(); },
         ),
+        if ((_mgr.currentVideo?.chapterList ?? const <VideoChapter>[]).isNotEmpty)
+          ListTile(
+            leading: const Icon(Icons.bookmarks_outlined),
+            title: Text('Главы: ${_mgr.currentVideo!.chapterList.length}'),
+            subtitle: const Text('Перейти к главе или повторять её',
+                style: TextStyle(fontSize: 11)),
+            onTap: () { Navigator.pop(context); _showChaptersSheet(); },
+          ),
         ListTile(
           leading: const Icon(Icons.content_cut),
           title: Text(_mgr.skips.isEmpty
@@ -739,7 +801,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Navigator.pop(context);
             final video = _mgr.currentVideo;
             if (video != null) {
-              showVideoActionsSheet(context, video, onChanged: () => setState(() {}));
+              showVideoActionsSheet(context, video,
+                  onChanged: () => setState(() {}), allowDelete: false);
             }
           },
         ),
@@ -1032,8 +1095,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     child: Slider(
                       value: _volume, min: 0, max: 1,
                       onChanged: (v) {
-                        setState(() => _volume = v);
-                        _mgr.controller?.setVolume(v);
+                        setState(() => _mgr.setVolume(v));
                       },
                     ),
                   ),

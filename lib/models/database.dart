@@ -1,3 +1,4 @@
+import 'dart:convert';
 import '../services/url_utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
@@ -22,15 +23,27 @@ class Album {
   final String name;
   final String? coverPath;
   final DateTime createdAt;
+  /// Ключ значка из models/album_style.dart (null = стандартная папка).
+  final String? icon;
+  /// Цвет значка, ARGB (null = фирменный фиолетовый).
+  final int? color;
 
-  Album({this.id, required this.name, this.coverPath, DateTime? createdAt})
-      : createdAt = createdAt ?? DateTime.now();
+  Album({
+    this.id,
+    required this.name,
+    this.coverPath,
+    DateTime? createdAt,
+    this.icon,
+    this.color,
+  }) : createdAt = createdAt ?? DateTime.now();
 
   Map<String, dynamic> toMap() => {
         'id': id,
         'name': name,
         'cover_path': coverPath,
         'created_at': createdAt.millisecondsSinceEpoch,
+        'icon': icon,
+        'color': color,
       };
 
   factory Album.fromMap(Map<String, dynamic> m) => Album(
@@ -38,15 +51,55 @@ class Album {
         name: m['name'],
         coverPath: m['cover_path'],
         createdAt: DateTime.fromMillisecondsSinceEpoch(m['created_at']),
+        icon: m['icon'] as String?,
+        color: (m['color'] as num?)?.toInt(),
       );
 
-  Album copyWith({int? id, String? name, String? coverPath}) => Album(
+  Album copyWith({int? id, String? name, String? coverPath, String? icon, int? color}) => Album(
         id: id ?? this.id,
         name: name ?? this.name,
         coverPath: coverPath ?? this.coverPath,
         createdAt: createdAt,
+        icon: icon ?? this.icon,
+        color: color ?? this.color,
       );
 }
+
+/// Глава видео (из yt-dlp): начало/конец в секундах и название.
+class VideoChapter {
+  final double start;
+  final double end;
+  final String title;
+  const VideoChapter({required this.start, required this.end, required this.title});
+
+  Map<String, dynamic> toJson() => {'s': start, 'e': end, 't': title};
+
+  static List<VideoChapter> decodeList(String? json) {
+    if (json == null || json.isEmpty) return const [];
+    try {
+      final raw = jsonDecode(json);
+      if (raw is! List) return const [];
+      return [
+        for (final c in raw)
+          if (c is Map)
+            VideoChapter(
+              start: (c['s'] as num?)?.toDouble() ?? 0,
+              end: (c['e'] as num?)?.toDouble() ?? 0,
+              title: (c['t'] ?? '').toString(),
+            ),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static String? encodeList(List<VideoChapter> chapters) =>
+      chapters.isEmpty ? null : jsonEncode([for (final c in chapters) c.toJson()]);
+}
+
+/// Видео, удаление которых ещё можно отменить (плашка «Отменить», см.
+/// services/pending_deletes.dart): запросы списков их не возвращают.
+final Set<int> kHiddenVideoIds = <int>{};
 
 class Video {
   final int? id;
@@ -61,6 +114,9 @@ class Video {
   final bool letterboxLandscape; // вертикальное видео показывать в горизонтальной рамке с полосами
   final int lastPositionMs; // где остановились в прошлый раз (для "продолжить просмотр")
   final DateTime addedAt;
+  final String? uploader;   // автор/канал/исполнитель (из yt-dlp; у старых видео null)
+  final int? lastPlayedAt;  // когда последний раз смотрели (мс с эпохи)
+  final String? chapters;   // главы видео: JSON [{s,e,t}] (секунды/название) или null
 
   Video({
     this.id,
@@ -75,7 +131,13 @@ class Video {
     this.letterboxLandscape = false,
     this.lastPositionMs = 0,
     DateTime? addedAt,
+    this.uploader,
+    this.lastPlayedAt,
+    this.chapters,
   }) : addedAt = addedAt ?? DateTime.now();
+
+  /// Главы (из поля chapters); пусто, если у видео их нет.
+  List<VideoChapter> get chapterList => VideoChapter.decodeList(chapters);
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -90,6 +152,9 @@ class Video {
         'letterbox_landscape': letterboxLandscape ? 1 : 0,
         'last_position_ms': lastPositionMs,
         'added_at': addedAt.millisecondsSinceEpoch,
+        'uploader': uploader,
+        'last_played_at': lastPlayedAt,
+        'chapters': chapters,
       };
 
   factory Video.fromMap(Map<String, dynamic> m) => Video(
@@ -105,13 +170,16 @@ class Video {
         letterboxLandscape: (m['letterbox_landscape'] ?? 0) == 1,
         lastPositionMs: m['last_position_ms'] ?? 0,
         addedAt: DateTime.fromMillisecondsSinceEpoch(m['added_at']),
+        uploader: m['uploader'] as String?,
+        lastPlayedAt: (m['last_played_at'] as num?)?.toInt(),
+        chapters: m['chapters'] as String?,
       );
 
   Video copyWith({
     int? id, String? title, String? filePath, String? thumbnailPath,
     String? sourceUrl, String? platform, int? duration, int? fileSize,
     int? albumId, bool clearAlbum = false, bool? letterboxLandscape,
-    int? lastPositionMs,
+    int? lastPositionMs, String? uploader, int? lastPlayedAt, String? chapters,
   }) => Video(
         id: id ?? this.id,
         title: title ?? this.title,
@@ -125,6 +193,9 @@ class Video {
         letterboxLandscape: letterboxLandscape ?? this.letterboxLandscape,
         lastPositionMs: lastPositionMs ?? this.lastPositionMs,
         addedAt: addedAt,
+        uploader: uploader ?? this.uploader,
+        lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
+        chapters: chapters ?? this.chapters,
       );
 
   String get durationFormatted {
@@ -268,14 +339,16 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'videovault.db');
     return openDatabase(
       path,
-      version: 6,
+      version: 10,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE albums (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             cover_path TEXT,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            icon TEXT,
+            color INTEGER
           )
         ''');
         await db.execute('''
@@ -291,7 +364,10 @@ class AppDatabase {
             album_id INTEGER REFERENCES albums(id) ON DELETE SET NULL,
             letterbox_landscape INTEGER DEFAULT 0,
             last_position_ms INTEGER DEFAULT 0,
-            added_at INTEGER NOT NULL
+            added_at INTEGER NOT NULL,
+            uploader TEXT,
+            last_played_at INTEGER,
+            chapters TEXT
           )
         ''');
         await db.execute('''
@@ -307,6 +383,7 @@ class AppDatabase {
             album_id INTEGER NOT NULL,
             video_id INTEGER NOT NULL,
             added_at INTEGER NOT NULL,
+            position INTEGER,
             PRIMARY KEY (album_id, video_id)
           )
         ''');
@@ -371,6 +448,26 @@ class AppDatabase {
             )
           ''');
         }
+        if (oldVersion < 7) {
+          // Свой порядок видео в альбоме (перетаскивание). NULL = порядок не
+          // задавали: такие видео идут сверху от новых к старым, как и раньше.
+          await db.execute('ALTER TABLE album_videos ADD COLUMN position INTEGER');
+        }
+        if (oldVersion < 8) {
+          // Значок и цвет альбома (правка альбома).
+          await db.execute('ALTER TABLE albums ADD COLUMN icon TEXT');
+          await db.execute('ALTER TABLE albums ADD COLUMN color INTEGER');
+        }
+        if (oldVersion < 9) {
+          // Автор/канал (сортировка по исполнителю) и время последнего просмотра
+          // (раздел «Продолжить просмотр»).
+          await db.execute('ALTER TABLE videos ADD COLUMN uploader TEXT');
+          await db.execute('ALTER TABLE videos ADD COLUMN last_played_at INTEGER');
+        }
+        if (oldVersion < 10) {
+          // Главы видео (JSON из yt-dlp), см. VideoChapter.
+          await db.execute('ALTER TABLE videos ADD COLUMN chapters TEXT');
+        }
       },
     );
   }
@@ -408,7 +505,7 @@ class AppDatabase {
   Future<List<Video>> getAllVideos() async {
     final d = await db;
     final rows = await d.query('videos', orderBy: 'added_at DESC');
-    return rows.map(Video.fromMap).toList();
+    return rows.map(Video.fromMap).where((v) => !kHiddenVideoIds.contains(v.id)).toList();
   }
 
   Future<List<Video>> getVideosByAlbum(int albumId) async {
@@ -417,9 +514,31 @@ class AppDatabase {
       SELECT v.* FROM videos v
       JOIN album_videos av ON av.video_id = v.id
       WHERE av.album_id = ?
-      ORDER BY v.added_at DESC
+      ORDER BY (av.position IS NULL) DESC, av.position ASC, v.added_at DESC
     ''', [albumId]);
-    return rows.map(Video.fromMap).toList();
+    return rows.map(Video.fromMap).where((v) => !kHiddenVideoIds.contains(v.id)).toList();
+  }
+
+  /// Ставит одному видео позицию в альбоме (например, номер в плейлисте).
+  Future<void> setAlbumVideoPosition(int albumId, int videoId, int position) async {
+    final d = await db;
+    await d.update('album_videos', {'position': position},
+        where: 'album_id = ? AND video_id = ?', whereArgs: [albumId, videoId]);
+    DBChangeNotifier.instance.bump();
+  }
+
+  /// Сохраняет порядок видео в альбоме: позиция = индекс в [orderedVideoIds].
+  /// Новые видео (без позиции) потом встают сверху, остальные — в этом порядке.
+  Future<void> setAlbumOrder(int albumId, List<int> orderedVideoIds) async {
+    final d = await db;
+    final batch = d.batch();
+    for (var i = 0; i < orderedVideoIds.length; i++) {
+      batch.update('album_videos', {'position': i},
+          where: 'album_id = ? AND video_id = ?',
+          whereArgs: [albumId, orderedVideoIds[i]]);
+    }
+    await batch.commit(noResult: true);
+    DBChangeNotifier.instance.bump();
   }
 
   /// Поиск игнорирует регистр и любые символы-разделители (запятые, дефисы,
@@ -574,7 +693,14 @@ class AppDatabase {
   /// видео на Home/Albums перезагружаться в реальном времени без надобности.
   Future<void> updateLastPosition(int id, int positionMs) async {
     final d = await db;
-    await d.update('videos', {'last_position_ms': positionMs},
+    // last_played_at обновляем, только когда есть что «продолжать» (позиция > 0):
+    // сброс в 0 по окончании просмотра убирает видео из «Продолжить просмотр».
+    await d.update(
+        'videos',
+        {
+          'last_position_ms': positionMs,
+          if (positionMs > 0) 'last_played_at': DateTime.now().millisecondsSinceEpoch,
+        },
         where: 'id = ?', whereArgs: [id]);
   }
 

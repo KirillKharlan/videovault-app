@@ -1,12 +1,21 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
-import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
+import 'download_foreground.dart';
+import 'local_ytdlp_service.dart';
+import 'sponsorblock_service.dart';
+
+/// Загрузку отменил пользователь (кнопка в приложении или в уведомлении).
+class DownloadCancelled implements Exception {
+  const DownloadCancelled();
+  @override
+  String toString() => 'Загрузка отменена';
+}
 
 class DownloadService {
   static final DownloadService _instance = DownloadService._internal();
@@ -15,7 +24,6 @@ class DownloadService {
 
   final _dio  = Dio(BaseOptions(receiveTimeout: const Duration(minutes: 30)));
   final _db   = AppDatabase();
-  final _api  = ApiClient();
   final _notifs = FlutterLocalNotificationsPlugin();
   bool _notifsInit = false;
 
@@ -25,45 +33,6 @@ class DownloadService {
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     ));
     _notifsInit = true;
-  }
-
-  /// Повторяет [action] при сетевых сбоях (обрыв соединения, таймаут,
-  /// DNS-ошибка) — именно такие ошибки типичны когда сервер "просыпается"
-  /// после сна или Wi-Fi на телефоне на секунду проседает. Не повторяет
-  /// ошибки, пришедшие явно ОТ сервера (например "видео недоступно") —
-  /// они осмысленные и повтор их не исправит.
-  Future<T> _withRetry<T>(
-    Future<T> Function() action, {
-    int maxAttempts = 3,
-    Duration delay = const Duration(seconds: 3),
-    void Function(int attempt)? onRetry,
-  }) async {
-    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await action();
-      } catch (e) {
-        final isNetworkError = _isNetworkError(e);
-        final isLastAttempt = attempt == maxAttempts;
-        if (!isNetworkError || isLastAttempt) rethrow;
-        onRetry?.call(attempt);
-        await Future.delayed(delay);
-      }
-    }
-    throw Exception('Unreachable');
-  }
-
-  bool _isNetworkError(Object e) {
-    if (e is SocketException) return true;
-    if (e is TimeoutException) return true;
-    if (e is http.ClientException) return true; // из api_client.dart (package:http)
-    if (e is DioException) {
-      return e.type == DioExceptionType.connectionError ||
-          e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.receiveTimeout ||
-          e.type == DioExceptionType.sendTimeout ||
-          e.type == DioExceptionType.unknown;
-    }
-    return false;
   }
 
   /// [info] — результат /api/info, если уже был получен (даёт duration,
@@ -79,145 +48,85 @@ class DownloadService {
     VideoInfo? info,
     Future<VideoInfo?>? infoFuture,
     void Function(double progress, String step)? onProgress,
+    String? resumeId,
+    void Function(String localId)? onStarted,
   }) async {
     await initNotifications();
     // Не даём телефону "усыпить" сеть/CPU на время всего скачивания —
     // особенно важно на прошивках с агрессивным энергосбережением.
     await WakelockPlus.enable();
+    // Foreground-сервис: скачивание продолжается, пока приложение свёрнуто,
+    // а в шторке видны прогресс и кнопка «Отменить».
+    await DownloadForeground.begin(title: info?.title ?? customTitle ?? 'Загрузка');
 
     try {
-      return await _doDownload(
+      // Скачивание всегда идёт на телефоне: yt-dlp встроен в приложение
+      // (см. local_ytdlp_service.dart).
+      return await _doDownloadLocal(
         url: url, quality: quality, albumId: albumId,
         albumIdResolver: albumIdResolver,
         customTitle: customTitle, info: info, infoFuture: infoFuture,
         onProgress: onProgress,
+        resumeId: resumeId, onStarted: onStarted,
       );
     } finally {
+      DownloadForeground.end();
       await WakelockPlus.disable();
     }
   }
 
-  Future<Video> _doDownload({
+  // ── Отмена и докачка ─────────────────────────────────────────────────
+  String? _activeLocalId;
+  bool _cancelRequested = false;
+
+  /// Останавливает идущую загрузку (процесс yt-dlp); недокачанное удаляется.
+  Future<void> cancelCurrent() async {
+    final id = _activeLocalId;
+    if (id == null) return;
+    _cancelRequested = true;
+    await LocalYtdlpService.instance.cancel(id);
+  }
+
+  /// Удаляет недокачанные файлы загрузки [localId] (после отмены или когда
+  /// упавшую загрузку убрали из очереди).
+  Future<void> discardParts(String? localId) async {
+    if (localId == null) return;
+    try {
+      final dir = await _videosDir();
+      await for (final entity in dir.list()) {
+        if (entity is File && entity.uri.pathSegments.last.startsWith('$localId.')) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Похоже ли на временный сбой сети (тогда повторяем с докачкой), а не на
+  /// постоянную ошибку вроде «видео недоступно».
+  static bool _looksTransient(Object e) {
+    final m = e.toString().toLowerCase();
+    const hints = [
+      'timed out', 'timeout', 'connection', 'network', 'unable to download',
+      'http error 5', 'temporary', 'reset by peer', 'ssl', 'read error',
+      'incomplete', 'eof', 'unreachable', 'broken pipe',
+    ];
+    return hints.any(m.contains);
+  }
+
+  /// Финал загрузки: миниатюра, уведомление
+  /// и запись в БД. [filePath] — уже лежащий на месте итоговый файл.
+  Future<Video> _finishVideo({
     required String url,
-    required String quality,
-    int? albumId,
-    int? Function()? albumIdResolver,
-    String? customTitle,
-    VideoInfo? info,
-    Future<VideoInfo?>? infoFuture,
+    required String filePath,
+    required String displayTitle,
+    required String taskId,
+    required VideoInfo? resolvedInfo,
+    required int? albumId,
+    required int? Function()? albumIdResolver,
     void Function(double progress, String step)? onProgress,
   }) async {
-    onProgress?.call(0, 'Запуск загрузки…');
-    _showNotif(0, 'Запуск…');
-
-    // 1. Старт задачи — с ретраями на случай сетевого сбоя именно в
-    //    момент подключения (сервер только проснулся, Wi-Fi проседает).
-    final taskId = await _withRetry(
-      () => _api.startDownload(url, quality),
-      onRetry: (attempt) => onProgress?.call(0, 'Проблема сети, повтор ($attempt/3)…'),
-    );
-
-    // 2. Polling прогресса
-    TaskProgress progress;
-    int notFoundCount = 0;
-    int errorCount = 0;
-    const maxNotFound = 40; // 40 × 1.5 сек = 60 сек ожидания
-
-    while (true) {
-      await Future.delayed(const Duration(milliseconds: 1500));
-
-      try {
-        progress = await _api.getProgress(taskId);
-        notFoundCount = 0;
-        errorCount = 0;
-      } catch (e) {
-        final msg = e.toString();
-
-        if (msg.contains('Задача не найдена')) {
-          notFoundCount++;
-          if (notFoundCount <= maxNotFound) {
-            onProgress?.call(0.01,
-                'Сервер обновляется… ожидание ${notFoundCount * 2} сек');
-            continue;
-          }
-          _notifs.cancel(42);
-          throw Exception(
-            'Сервер перезапустился во время загрузки. '
-            'Попробуйте скачать снова — теперь yt-dlp обновлён и всё заработает.',
-          );
-        }
-
-        errorCount++;
-        if (errorCount > 5) {
-          _notifs.cancel(42);
-          throw Exception('Потеряно соединение с сервером: $e');
-        }
-        onProgress?.call(0.01, 'Проблема сети, попытка $errorCount/5…');
-        continue;
-      }
-
-      if (progress.isError) {
-        _notifs.cancel(42);
-        throw Exception(progress.error ?? 'Ошибка загрузки');
-      }
-
-      onProgress?.call(progress.percent / 100, progress.step);
-      _showNotif(progress.percent.toInt(), progress.title ?? 'Загрузка…');
-
-      if (progress.isDone) break;
-    }
-
-    // Инфо о видео (обложка/платформа/длительность) могла запрашиваться
-    // ПАРАЛЛЕЛЬНО со скачиванием (infoFuture) — к этому моменту она, как
-    // правило, давно готова, ждём только на случай, если нет. Ошибка или
-    // таймаут инфо — не фатальны: видео просто сохранится без обложки.
-    VideoInfo? resolvedInfo = info;
-    if (resolvedInfo == null && infoFuture != null) {
-      try {
-        resolvedInfo = await infoFuture.timeout(const Duration(seconds: 25));
-      } catch (_) {
-        resolvedInfo = null;
-      }
-    }
-
-    // 3. Скачиваем файл с сервера на телефон (тоже с ретраями)
-    onProgress?.call(0.97, 'Сохранение на телефон…');
-    final dir = await _videosDir();
-
-    // "video" — плейсхолдер сервера, если название на тот момент ещё не
-    // было известно; тогда берём название из инфо.
-    final serverTitle = (progress.title != null && progress.title != 'video')
-        ? progress.title
-        : null;
-    final displayTitle = (customTitle != null && customTitle.trim().isNotEmpty)
-        ? customTitle.trim()
-        : (serverTitle ?? resolvedInfo?.title ?? 'video');
-
-    final ext = (progress.filename != null && progress.filename!.contains('.'))
-        ? progress.filename!.split('.').last
-        : 'mp4';
-    final safeFilename = '${_sanitize(displayTitle)}_$taskId.$ext';
-    final filePath = '${dir.path}/$safeFilename';
-
-    try {
-      await _withRetry(
-        () => _dio.download(
-          _api.fileUrl(taskId),
-          filePath,
-          onReceiveProgress: (received, total) {
-            if (total > 0) {
-              final mb = received / 1024 / 1024;
-              onProgress?.call(0.97, 'Сохранение… ${mb.toStringAsFixed(1)} MB');
-            }
-          },
-        ),
-        onRetry: (attempt) => onProgress?.call(0.97, 'Проблема сети при сохранении, повтор ($attempt/3)…'),
-      );
-    } catch (e) {
-      _notifs.cancel(42);
-      throw Exception('Ошибка при сохранении файла: $e');
-    }
-
     // 4. Скачиваем и сохраняем миниатюру (если есть URL от YouTube)
     String? thumbPath;
     final thumbUrl = resolvedInfo?.thumbnail;
@@ -243,10 +152,151 @@ class DownloadService {
       // Альбом выбирают и меняют в очереди прямо во время скачивания —
       // берём актуальное значение на момент сохранения, а не на старте.
       albumId: albumIdResolver != null ? albumIdResolver() : albumId,
+      uploader: (resolvedInfo?.uploader.trim().isNotEmpty ?? false)
+          ? resolvedInfo!.uploader.trim()
+          : null,
+      chapters: resolvedInfo?.chaptersJson,
     );
 
     final id = await _db.insertVideo(video);
-    return video.copyWith(id: id, fileSize: fileSize);
+    final saved = video.copyWith(id: id, fileSize: fileSize);
+    // Автопропуск рекламы (SponsorBlock) — в фоне, загрузку не задерживает.
+    unawaited(SponsorBlockService.instance.applyTo(saved));
+    return saved;
+  }
+
+  /// Скачивание ПРЯМО НА ТЕЛЕФОНЕ через yt-dlp, встроенный в приложение
+  /// (см. local_ytdlp_service.dart): без сервера, один этап. Файл сразу
+  /// появляется в папке видео, дальше — тот же финал, что и у серверной схемы.
+  Future<Video> _doDownloadLocal({
+    required String url,
+    required String quality,
+    int? albumId,
+    int? Function()? albumIdResolver,
+    String? customTitle,
+    VideoInfo? info,
+    Future<VideoInfo?>? infoFuture,
+    void Function(double progress, String step)? onProgress,
+    String? resumeId,
+    void Function(String localId)? onStarted,
+  }) async {
+    final local = LocalYtdlpService.instance;
+    onProgress?.call(0, 'Запуск yt-dlp на телефоне…');
+    _showNotif(0, 'Запуск…');
+
+    VideoInfo? resolvedInfo = info;
+    if (resolvedInfo == null && infoFuture != null) {
+      try {
+        resolvedInfo = await infoFuture.timeout(const Duration(seconds: 20));
+      } catch (_) {
+        resolvedInfo = null;
+      }
+    }
+
+    final dir = await _videosDir();
+    await _cleanupStaleParts(dir);
+    // Стабильный id загрузки: повторный запуск с тем же id продолжает недокачанные
+    // файлы (yt-dlp докачивает .part), а не начинает заново.
+    final localId = resumeId ?? 'l${DateTime.now().millisecondsSinceEpoch}';
+    onStarted?.call(localId);
+    _activeLocalId = localId;
+    _cancelRequested = false;
+    final notifTitle = resolvedInfo?.title ?? 'Загрузка…';
+
+    String? produced;
+    var attempt = 0;
+    try {
+      while (true) {
+        attempt++;
+        try {
+          produced = await local.download(
+            url: url,
+            outDir: dir.path,
+            id: localId,
+            quality: quality,
+            keepOnFailure: true,
+            onProgress: (percent, eta) {
+              final p = percent.clamp(0.0, 100.0).toDouble();
+              final etaText = eta > 0 ? ' · ещё $eta с' : '';
+              onProgress?.call(p / 100 * 0.97, 'На телефоне: ${p.toStringAsFixed(0)}%$etaText');
+              _showNotif(p.toInt(), notifTitle);
+            },
+          );
+          break;
+        } catch (e) {
+          if (_cancelRequested) {
+            await discardParts(localId);
+            _notifs.cancel(42);
+            throw const DownloadCancelled();
+          }
+          // Обрыв сети: до 3 попыток подряд, каждая продолжает с места обрыва.
+          if (attempt < 3 && _looksTransient(e)) {
+            onProgress?.call(0, 'Обрыв связи, повтор ($attempt/3)…');
+            await Future.delayed(const Duration(seconds: 3));
+            if (_cancelRequested) {
+              await discardParts(localId);
+              throw const DownloadCancelled();
+            }
+            continue;
+          }
+          _notifs.cancel(42);
+          rethrow;
+        }
+      }
+    } finally {
+      _activeLocalId = null;
+    }
+    final producedPath = produced!;
+
+    // Инфо не пришла заранее (редкий случай) — запрашиваем уже после скачивания,
+    // чтобы не остаться без названия/обложки; не вышло — не критично.
+    if (resolvedInfo == null) {
+      try {
+        resolvedInfo = await local.fetchInfo(url).timeout(const Duration(seconds: 40));
+      } catch (_) {
+        resolvedInfo = null;
+      }
+    }
+
+    final displayTitle = (customTitle != null && customTitle.trim().isNotEmpty)
+        ? customTitle.trim()
+        : (resolvedInfo?.title ?? 'video');
+
+    final producedName = producedPath.split('/').last;
+    final ext = producedName.contains('.') ? producedName.split('.').last : 'mp4';
+    final filePath = '${dir.path}/${_sanitize(displayTitle)}_$localId.$ext';
+    try {
+      await File(producedPath).rename(filePath);
+    } catch (e) {
+      _notifs.cancel(42);
+      throw Exception('Ошибка при сохранении файла: $e');
+    }
+
+    return _finishVideo(
+      url: url, filePath: filePath, displayTitle: displayTitle, taskId: localId,
+      resolvedInfo: resolvedInfo, albumId: albumId, albumIdResolver: albumIdResolver,
+      onProgress: onProgress,
+    );
+  }
+
+  /// Недокачанное (приложение убили посреди загрузки) остаётся в папке видео как
+  /// `l<число>.*` (файлы yt-dlp до переименования) или старые `dl_*.part` — удаляем
+  /// такие, если им больше часа. Готовые видео переименовываются в `<название>_l<id>.mp4`
+  /// и под эти шаблоны не попадают.
+  Future<void> _cleanupStaleParts(Directory dir, {String keep = ''}) async {
+    try {
+      final cutoff = DateTime.now().subtract(const Duration(hours: 1));
+      await for (final entity in dir.list()) {
+        if (entity is! File || entity.path == keep) continue;
+        final name = entity.uri.pathSegments.last;
+        final isLegacyPart = name.startsWith('dl_') && name.endsWith('.part');
+        final isYtdlpTemp = RegExp(r'^l\d+\.').hasMatch(name);
+        if (!isLegacyPart && !isYtdlpTemp) continue;
+        if ((await entity.lastModified()).isBefore(cutoff)) await entity.delete();
+      }
+    } catch (_) {
+      // уборка не критична
+    }
   }
 
   Future<String?> _downloadThumbnail(String url, String taskId) async {
@@ -293,16 +343,9 @@ class DownloadService {
     if (await f.exists()) await f.delete();
   }
 
+  /// Прогресс идёт в уведомление foreground-сервиса (см. download_foreground.dart).
   void _showNotif(int percent, String text) {
-    final short = text.length > 40 ? '${text.substring(0, 40)}…' : text;
-    _notifs.show(42, 'VideoVault', short, NotificationDetails(
-      android: AndroidNotificationDetails(
-        'downloads', 'Downloads',
-        importance: Importance.low, priority: Priority.low,
-        showProgress: true, maxProgress: 100, progress: percent,
-        ongoing: true, onlyAlertOnce: true,
-      ),
-    ));
+    DownloadForeground.update(title: text, percent: percent);
   }
 
   void _showDoneNotif(String title) {

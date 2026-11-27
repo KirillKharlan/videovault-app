@@ -3,6 +3,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/api_client.dart';
 import '../models/database.dart';
 import '../services/download_manager.dart';
+import '../services/local_ytdlp_service.dart';
+import '../services/settings_service.dart';
 import '../widgets/safe_bottom_sheet.dart';
 
 class DownloadScreen extends StatefulWidget {
@@ -16,12 +18,12 @@ class DownloadScreen extends StatefulWidget {
 
 class _DownloadScreenState extends State<DownloadScreen> {
   final _urlCtrl    = TextEditingController();
-  final _titleCtrl  = TextEditingController();
-  final _api        = ApiClient();
   final _db         = AppDatabase();
 
-  VideoInfo? _info;
-  String? _selectedQuality;
+  // Инфо о последней введённой ссылке: если пользователь закрыл выбор качества
+  // и нажал «Скачать» ещё раз, повторно не запрашиваем.
+  VideoInfo? _cachedInfo;
+  String? _cachedInfoUrl;
   int?    _selectedAlbumId;
   String? _selectedAlbumName;
   List<Album> _albums = [];
@@ -38,7 +40,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
     if (widget.initialUrl != null) {
       _urlCtrl.text = widget.initialUrl!;
       widget.onUrlConsumed?.call();
-      WidgetsBinding.instance.addPostFrameCallback((_) => _fetchInfo());
     }
   }
 
@@ -55,24 +56,23 @@ class _DownloadScreenState extends State<DownloadScreen> {
   /// (или null при ошибке) — это нужно, чтобы _download() мог передать этот
   /// же Future в DownloadService и запустить скачивание ПАРАЛЛЕЛЬНО, не
   /// дожидаясь ответа.
-  Future<VideoInfo?> _fetchInfo() async {
-    final url = _urlCtrl.text.trim();
-    if (url.isEmpty) return null;
-    setState(() { _fetchingInfo = true; _info = null; _fetchError = ''; });
+  /// Инфо о видео — локальным yt-dlp на телефоне. [refresh] оставлен для кнопки
+  /// «Обновить список качеств»: локальный запрос и так каждый раз идёт заново.
+  Future<VideoInfo> _loadInfo(String url, {bool refresh = false}) =>
+      LocalYtdlpService.instance.fetchInfo(url);
+
+  /// Инфо о видео для выбора качества: из кэша (та же ссылка) либо запрос.
+  /// null — ошибка (текст в _fetchError) или ссылку успели поменять.
+  Future<VideoInfo?> _obtainInfo(String url) async {
+    if (_cachedInfoUrl == url && _cachedInfo != null) return _cachedInfo;
+    setState(() { _fetchingInfo = true; _fetchError = ''; _downloadError = ''; });
     try {
-      final info = await _api.fetchInfo(url);
-      // Пока шёл запрос, поле могли очистить (скачивание успело завершиться)
-      // или вставить другую ссылку — устаревшее инфо в форму не пускаем.
-      if (mounted && _urlCtrl.text.trim() == url) {
-        setState(() {
-          _info = info;
-          _titleCtrl.text = info.title;
-          _selectedQuality = info.qualities.isNotEmpty ? info.qualities.first : 'best';
-          _fetchingInfo = false;
-        });
-      } else if (mounted) {
-        setState(() => _fetchingInfo = false);
-      }
+      final info = await _loadInfo(url);
+      if (!mounted) return null;
+      setState(() => _fetchingInfo = false);
+      if (_urlCtrl.text.trim() != url) return null; // ссылку поменяли, пока шёл запрос
+      _cachedInfo = info;
+      _cachedInfoUrl = url;
       return info;
     } catch (e) {
       if (mounted) setState(() { _fetchingInfo = false; _fetchError = '❌ $e'; });
@@ -80,18 +80,23 @@ class _DownloadScreenState extends State<DownloadScreen> {
     }
   }
 
-  /// Ставит загрузку в очередь DownloadManager и СРАЗУ освобождает форму:
-  /// поле ссылки, превью и название очищаются, можно вставлять следующую
-  /// ссылку, не дожидаясь конца этой. Альбом остаётся выбранным (удобно
-  /// пачкой качать в один альбом); у каждой загрузки в очереди его можно
-  /// поменять отдельно. Ошибка попадает и в очередь (если там есть кого
-  /// сравнить), и сюда — текстом под формой.
+  /// Кнопка «Скачать»: получает инфо о видео, показывает выбор качества и
+  /// только после выбора ставит загрузку в очередь DownloadManager. Форма
+  /// СРАЗУ освобождается: можно вставлять следующую ссылку, не дожидаясь
+  /// конца этой. Альбом остаётся выбранным (удобно качать пачкой в один
+  /// альбом); у каждой загрузки в очереди его можно поменять отдельно.
   Future<void> _download() async {
     final url = _urlCtrl.text.trim();
-    if (url.isEmpty) return;
+    if (url.isEmpty || _fetchingInfo) return;
+
+    // Ссылка на плейлист — отдельный сценарий: все видео в новый альбом.
+    if (LocalYtdlpService.looksLikePlaylist(url)) {
+      await _downloadPlaylist(url);
+      return;
+    }
 
     // Это видео уже есть в библиотеке? Предупреждаем до того, как тратить
-    // трафик/прокси на повторное скачивание той же самой копии.
+    // трафик на повторное скачивание той же самой копии.
     final existing = await _db.findVideoBySourceUrl(url);
     if (existing != null && mounted) {
       final again = await showDialog<bool>(
@@ -114,25 +119,42 @@ class _DownloadScreenState extends State<DownloadScreen> {
       if (again != true) return;
     }
 
-    // Инфо о видео: уже получена (кнопкой "Получить информацию") — берём её,
-    // нет — запрашиваем ПАРАЛЛЕЛЬНО со скачиванием, не дожидаясь. Запрос
-    // идёт отдельно от формы, чтобы не блокировать её для следующей ссылки.
-    final VideoInfo? readyInfo = _info;
-    final Future<VideoInfo?>? infoFuture = readyInfo == null
-        ? _api.fetchInfo(url).then<VideoInfo?>((i) => i).catchError((_) => null)
-        : null;
+    // 1. Узнаём, в каких качествах доступно видео
+    final info = await _obtainInfo(url);
+    if (info == null || !mounted) return;
 
-    final quality = _selectedQuality ?? 'best';
-    final title = _titleCtrl.text.trim().isNotEmpty ? _titleCtrl.text.trim() : null;
+    // 2. Качество: по умолчанию из настроек, если оно есть у этого видео; иначе
+    //    пользователь выбирает сам (с пояснением, если «по умолчанию» не нашлось)
+    //    и при желании меняет название.
+    _QualityChoice? choice;
+    String? notice;
+    final preset = SettingsService.instance.defaultQuality;
+    if (preset != null) {
+      final auto = _qualityFromPreset(info, preset);
+      if (auto != null) {
+        choice = _QualityChoice(quality: auto, info: info);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Скачивание: «${info.title}» · ${info.qualityLabel(auto)}'),
+            duration: const Duration(seconds: 2),
+          ));
+        }
+      } else {
+        notice = 'Качества по умолчанию (${preset}p) нет у этого видео — выберите другое';
+      }
+    }
+    choice ??= await _pickQualityForDownload(url, info, notice: notice);
+    if (choice == null || !mounted) return; // закрыли, ничего не выбрав
 
+    // 3. Скачивание в выбранном качестве
     DownloadManager.instance.enqueue(
       url: url,
-      quality: quality,
+      quality: choice.quality,
       albumId: _selectedAlbumId,
       albumName: _selectedAlbumName,
-      customTitle: title,
-      info: readyInfo,
-      infoFuture: infoFuture,
+      customTitle: choice.title,
+      info: choice.info,
+      infoFuture: null,
       onDone: (video) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -145,15 +167,316 @@ class _DownloadScreenState extends State<DownloadScreen> {
       },
     );
 
-    // Форма свободна для следующей ссылки сразу, не после завершения.
     setState(() {
-      _info = null;
       _fetchError = '';
       _downloadError = '';
-      _selectedQuality = null;
+      _cachedInfo = null;
+      _cachedInfoUrl = null;
     });
     _urlCtrl.clear();
-    _titleCtrl.clear();
+  }
+
+  /// Окно выбора качества. Показывает превью и название (его можно изменить),
+  /// список доступных качеств с оценкой размера и кнопку «Обновить список».
+  /// Возвращает выбор или null, если окно закрыли.
+  /// Качество из настройки «по умолчанию»: 'best' — лучшее из доступных, число —
+  /// ровно такая высота, если у видео она есть; иначе null (тогда спрашиваем).
+  String? _qualityFromPreset(VideoInfo info, String preset) {
+    if (info.qualities.isEmpty) return null;
+    if (preset == 'best') return info.qualities.first;
+    return info.qualities.contains(preset) ? preset : null;
+  }
+
+  Future<_QualityChoice?> _pickQualityForDownload(String url, VideoInfo initial, {String? notice}) {
+    var info = initial;
+    var title = initial.title;
+    var refreshing = false;
+    String? refreshError;
+    return showSafeModalBottomSheet<_QualityChoice>(
+      context: context,
+      builder: (sheetCtx) => StatefulBuilder(builder: (ctx, setSheet) {
+        final purple = Theme.of(ctx).colorScheme.primary;
+        final count = info.qualities.length;
+        return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+            child: Row(children: [
+              if (info.thumbnail != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: CachedNetworkImage(
+                      imageUrl: info.thumbnail!,
+                      width: 100, height: 60, fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) => Container(
+                          width: 100, height: 60, color: const Color(0xFF1E1E2A),
+                          child: const Icon(Icons.video_file, color: Colors.white38)),
+                    ),
+                  ),
+                ),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Row(children: [
+                  _badge(info.platform.toUpperCase(), purple),
+                  const SizedBox(width: 8),
+                  Text(info.durationFormatted,
+                      style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                ]),
+              ])),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 20),
+                tooltip: 'Изменить название',
+                onPressed: () async {
+                  final t = await _askTitle(ctx, title);
+                  if (t != null && ctx.mounted) setSheet(() => title = t);
+                },
+              ),
+            ]),
+          ),
+          if (notice != null)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.amber.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(notice, style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: Text('Выберите качество — загрузка начнётся сразу',
+                style: TextStyle(color: Colors.white54, fontSize: 12)),
+          ),
+          for (var i = 0; i < count; i++)
+            ListTile(
+              title: Text(info.qualityLabel(info.qualities[i]) +
+                  (i == 0 && count > 1 ? ' · лучшее' : '')),
+              subtitle: info.qualitySizeLabel(info.qualities[i]) == null
+                  ? null
+                  : Text(info.qualitySizeLabel(info.qualities[i])!),
+              trailing: Icon(Icons.download, color: purple),
+              onTap: () => Navigator.pop(
+                sheetCtx,
+                _QualityChoice(
+                  quality: info.qualities[i],
+                  info: info,
+                  // Название передаём, только если его меняли.
+                  title: title.trim().isNotEmpty && title.trim() != initial.title
+                      ? title.trim()
+                      : null,
+                ),
+              ),
+            ),
+          const Divider(height: 1),
+          for (final audioQuality in const ['audio_m4a', 'audio_mp3'])
+            ListTile(
+              leading: const Icon(Icons.music_note_outlined),
+              title: Text(info.qualityLabel(audioQuality)),
+              subtitle: info.qualitySizeLabel(audioQuality) == null
+                  ? null
+                  : Text(info.qualitySizeLabel(audioQuality)!),
+              trailing: Icon(Icons.download, color: purple),
+              onTap: () => Navigator.pop(
+                sheetCtx,
+                _QualityChoice(
+                  quality: audioQuality,
+                  info: info,
+                  title: title.trim().isNotEmpty && title.trim() != initial.title
+                      ? title.trim()
+                      : null,
+                ),
+              ),
+            ),
+          const Divider(height: 1),
+          ListTile(
+            leading: refreshing
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.refresh),
+            title: const Text('Обновить список качеств'),
+            subtitle: const Text('Если нужного качества нет — запросить заново'),
+            onTap: refreshing
+                ? null
+                : () async {
+                    setSheet(() { refreshing = true; refreshError = null; });
+                    try {
+                      final fresh = await _loadInfo(url, refresh: true);
+                      _cachedInfo = fresh;
+                      _cachedInfoUrl = url;
+                      if (!ctx.mounted) return;
+                      setSheet(() { info = fresh; refreshing = false; });
+                    } catch (e) {
+                      if (!ctx.mounted) return;
+                      setSheet(() { refreshing = false; refreshError = '$e'; });
+                    }
+                  },
+          ),
+          if (refreshError != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('❌ $refreshError',
+                  style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+            ),
+        ]);
+      }),
+    );
+  }
+
+  /// Плейлист целиком: список видео → диалог (название альбома и качество) →
+  /// новый альбом и по загрузке на каждое видео, в порядке плейлиста.
+  Future<void> _downloadPlaylist(String url) async {
+    setState(() { _fetchingInfo = true; _fetchError = ''; _downloadError = ''; });
+    final PlaylistInfo playlist;
+    try {
+      playlist = await LocalYtdlpService.instance.fetchPlaylist(url);
+    } catch (e) {
+      if (mounted) setState(() { _fetchingInfo = false; _fetchError = '❌ $e'; });
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _fetchingInfo = false);
+    if (_urlCtrl.text.trim() != url) return; // ссылку поменяли, пока шёл запрос
+    if (playlist.entries.isEmpty) {
+      setState(() => _fetchError = '❌ В плейлисте нет доступных видео');
+      return;
+    }
+
+    final choice = await _askPlaylistChoice(playlist);
+    if (choice == null || !mounted) return;
+
+    final db = AppDatabase();
+    final albumId = await db.insertAlbum(Album(
+      name: choice.albumName,
+      icon: choice.quality.startsWith('audio_') ? 'music' : 'folder_special',
+    ));
+    for (var i = 0; i < playlist.entries.length; i++) {
+      final entry = playlist.entries[i];
+      DownloadManager.instance.enqueue(
+        url: entry.url,
+        quality: choice.quality,
+        albumId: albumId,
+        albumName: choice.albumName,
+        // Название, длительность и обложка уже известны из списка — отдельный
+        // запрос на каждое видео не нужен.
+        info: VideoInfo(
+          title: entry.title,
+          duration: entry.duration,
+          thumbnail: entry.thumbnail,
+          platform: 'youtube',
+          uploader: entry.uploader ?? '',
+          qualities: const ['best'],
+        ),
+        // Порядок в альбоме = порядок в плейлисте (по умолчанию новые видео шли бы наверх).
+        onDone: (video) {
+          if (video.id != null) db.setAlbumVideoPosition(albumId, video.id!, i);
+        },
+      );
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('В очередь добавлено ${playlist.entries.length} видео → альбом «${choice.albumName}»'),
+    ));
+    setState(() { _fetchError = ''; _downloadError = ''; });
+    _urlCtrl.clear();
+  }
+
+  Future<_PlaylistChoice?> _askPlaylistChoice(PlaylistInfo playlist) {
+    final nameCtrl = TextEditingController(text: playlist.title);
+    const options = <List<String>>[
+      ['best', 'Лучшее'],
+      ['1080', '1080p'],
+      ['720', '720p'],
+      ['480', '480p'],
+      ['360', '360p'],
+      ['audio_m4a', 'Аудио m4a'],
+      ['audio_mp3', 'Аудио MP3'],
+    ];
+    final preset = SettingsService.instance.defaultQuality;
+    var quality = options.any((o) => o[0] == preset) ? preset! : 'best';
+    final totalSeconds = playlist.entries.fold<int>(0, (sum, e) => sum + e.duration);
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final durationText = totalSeconds > 0
+        ? ' · ${hours > 0 ? '$hours ч ' : ''}$minutes мин'
+        : '';
+
+    return showDialog<_PlaylistChoice>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: const Color(0xFF16161E),
+          title: const Text('Скачать плейлист'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${playlist.entries.length} видео$durationText',
+                  style: const TextStyle(color: Colors.white54, fontSize: 13)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Название нового альбома'),
+              ),
+              const SizedBox(height: 16),
+              const Text('Качество', style: TextStyle(color: Colors.white54, fontSize: 12)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 4, children: [
+                for (final o in options)
+                  ChoiceChip(
+                    label: Text(o[1]),
+                    selected: quality == o[0],
+                    onSelected: (_) => setLocal(() => quality = o[0]),
+                  ),
+              ]),
+              const SizedBox(height: 10),
+              const Text(
+                'Для каждого видео берётся лучшее качество не выше выбранного. '
+                'Видео попадут в альбом в порядке плейлиста.',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Отмена')),
+            TextButton(
+              onPressed: () {
+                final name = nameCtrl.text.trim();
+                Navigator.pop(dialogCtx, _PlaylistChoice(
+                  albumName: name.isEmpty ? playlist.title : name,
+                  quality: quality,
+                ));
+              },
+              child: Text('Скачать все (${playlist.entries.length})'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Диалог изменения названия. null — отмена или пустое название.
+  Future<String?> _askTitle(BuildContext ctx, String current) {
+    final ctrl = TextEditingController(text: current);
+    return showDialog<String>(
+      context: ctx,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: const Color(0xFF16161E),
+        title: const Text('Название'),
+        content: TextField(controller: ctrl, autofocus: true, maxLines: 3, minLines: 1),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Отмена')),
+          TextButton(
+            onPressed: () {
+              final t = ctrl.text.trim();
+              Navigator.pop(dialogCtx, t.isEmpty ? null : t);
+            },
+            child: const Text('Готово'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -182,84 +505,16 @@ class _DownloadScreenState extends State<DownloadScreen> {
                     hintText: 'YouTube, TikTok, Instagram…',
                     contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   ),
-                  onSubmitted: (_) => _fetchInfo(),
+                  onSubmitted: (_) => _download(),
                 )),
               ]),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _fetchingInfo ? null : _fetchInfo,
-                icon: _fetchingInfo
-                    ? const SizedBox(width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.info_outline),
-                label: Text(_fetchingInfo ? 'Загрузка…' : 'Получить информацию'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: purple, side: BorderSide(color: purple),
-                  minimumSize: const Size(double.infinity, 44),
-                ),
-              ),
             ]),
-
-            // Инфо о видео + переименование
-            if (_info != null) ...[
-              const SizedBox(height: 16),
-              _card(children: [
-                Row(children: [
-                  if (_info!.thumbnail != null)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: CachedNetworkImage(
-                        imageUrl: _info!.thumbnail!,
-                        width: 100, height: 60, fit: BoxFit.cover,
-                        errorWidget: (_, __, ___) =>
-                            Container(width: 100, height: 60, color: const Color(0xFF1E1E2A),
-                                child: const Icon(Icons.video_file, color: Colors.white38)),
-                      ),
-                    ),
-                  const SizedBox(width: 12),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      _badge(_info!.platform.toUpperCase(), purple),
-                      const SizedBox(width: 8),
-                      Text(_info!.durationFormatted,
-                          style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    ]),
-                  ])),
-                ]),
-                const SizedBox(height: 12),
-                const Text('Название (можно изменить)',
-                    style: TextStyle(color: Colors.white54, fontSize: 11)),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _titleCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: InputDecoration(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.refresh, size: 18, color: Colors.white38),
-                      tooltip: 'Восстановить оригинальное название',
-                      onPressed: () => setState(() => _titleCtrl.text = _info!.title),
-                    ),
-                  ),
-                ),
-              ]),
-            ],
 
             // Опции
             const SizedBox(height: 16),
             _card(children: [
               const Text('Настройки', style: TextStyle(color: Colors.white54, fontSize: 12)),
               const SizedBox(height: 12),
-
-              _optionRow(Icons.hd, 'Качество',
-                  _selectedQuality != null
-                      ? (_selectedQuality!.isNotEmpty && RegExp(r'^\d+$').hasMatch(_selectedQuality!)
-                          ? '${_selectedQuality}p'
-                          : _selectedQuality!)
-                      : 'Выберите после загрузки инфо',
-                  _info == null ? null : _pickQuality),
-
-              const Divider(color: Color(0xFF2A2A38), height: 24),
 
               _optionRow(Icons.folder_outlined, 'Альбом',
                   _selectedAlbumName ?? 'Без альбома', _pickAlbum),
@@ -288,7 +543,17 @@ class _DownloadScreenState extends State<DownloadScreen> {
                 valueColor: AlwaysStoppedAnimation(purple),
               ),
               const SizedBox(height: 8),
-              Text(mgr.statusText, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+              Row(children: [
+                Expanded(
+                  child: Text(mgr.statusText,
+                      style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                ),
+                TextButton.icon(
+                  onPressed: () => DownloadManager.instance.cancelActive(),
+                  icon: const Icon(Icons.stop_circle_outlined, size: 18, color: Colors.redAccent),
+                  label: const Text('Отменить', style: TextStyle(color: Colors.redAccent)),
+                ),
+              ]),
               if (mgr.pendingCount > 1)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
@@ -357,22 +622,6 @@ class _DownloadScreenState extends State<DownloadScreen> {
         child: Text(text, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
       );
 
-  void _pickQuality() {
-    final qualities = _info?.qualities ?? [];
-    showSafeModalBottomSheet(context: context,
-      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
-        const Padding(padding: EdgeInsets.all(16),
-            child: Text('Качество', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
-        ...qualities.map((q) => ListTile(
-          title: Text('${q}p'),
-          trailing: _selectedQuality == q
-              ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary) : null,
-          onTap: () { setState(() => _selectedQuality = q); Navigator.pop(context); },
-        )),
-      ]),
-    );
-  }
-
   void _pickAlbum() {
     showSafeModalBottomSheet(context: context,
       builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
@@ -416,7 +665,21 @@ class _DownloadScreenState extends State<DownloadScreen> {
   void dispose() {
     DownloadManager.instance.removeListener(_onManagerChanged);
     _urlCtrl.dispose();
-    _titleCtrl.dispose();
     super.dispose();
   }
+}
+
+/// Результат окна выбора качества.
+class _QualityChoice {
+  final String quality;
+  final VideoInfo info;
+  final String? title; // null — название не меняли
+  _QualityChoice({required this.quality, required this.info, this.title});
+}
+
+/// Выбор в диалоге «Скачать плейлист».
+class _PlaylistChoice {
+  final String albumName;
+  final String quality;
+  _PlaylistChoice({required this.albumName, required this.quality});
 }
